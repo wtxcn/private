@@ -1,6 +1,11 @@
-# Amex Native Offer Clicker
+# Card Offer Clickers
 
-Tampermonkey userscript for adding Amex Offers by clicking the native Amex UI.
+Tampermonkey userscripts for adding card offers by clicking each issuer's native UI.
+
+## Scripts
+
+- `AmexNativeOfferClicker.user.js`: Amex Offers helper.
+- `ChaseOfferClicker.user.js`: Chase Offers helper for the currently loaded Chase Offers page.
 
 ## Why this script exists
 
@@ -41,4 +46,19 @@ When enabled, the script periodically sends light activity to the page. If Amex 
 
 ## Notes
 
-This script does not make purchases or payments. It only adds available Amex Offers to cards through the visible Amex UI.
+These scripts do not make purchases or payments. They only add available offers through the visible issuer UI.
+
+## Chase Usage
+
+1. Install `ChaseOfferClicker.user.js` in Tampermonkey.
+2. Open the Chase Offers page for the card/account you want to process.
+3. Use the floating `Chase Offers` panel.
+4. Click `Add Loaded Offers`.
+
+The Chase script is intentionally conservative:
+
+- It does not call Chase private APIs.
+- It only clicks visible native controls matching labels like `Add to card`, `Add offer`, or `Activate offer`.
+- It scrolls slowly to load more offers.
+- It reloads once to verify whether more addable offers appear.
+- It does not yet auto-switch Chase cards/accounts because Chase's account selector structure needs to be verified on the live page.
