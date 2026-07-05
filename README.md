@@ -61,4 +61,6 @@ The Chase script is intentionally conservative:
 - It only clicks visible native controls matching labels like `Add to card`, `Add offer`, or `Activate offer`.
 - It scrolls slowly to load more offers.
 - It reloads once to verify whether more addable offers appear.
+- It shows a timeout warning when Chase has logged out.
+- `Debug Scan` logs the offer-like controls it can see without clicking them.
 - It does not yet auto-switch Chase cards/accounts because Chase's account selector structure needs to be verified on the live page.

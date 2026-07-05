@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Native Offer Clicker - Refresh Safe
 // @namespace    https://www.chase.com/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Adds Chase Offers by clicking native Chase UI buttons slowly, with scroll and refresh verification.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -86,6 +86,19 @@
     return (node?.innerText || node?.textContent || "").trim().replace(/\s+/g, " ");
   }
 
+  function getLabel(node) {
+    return [
+      textOf(node),
+      node.getAttribute("aria-label") || "",
+      node.getAttribute("title") || "",
+      node.getAttribute("alt") || "",
+      node.getAttribute("data-testid") || "",
+      node.getAttribute("data-test-id") || "",
+      node.getAttribute("id") || "",
+      node.value || ""
+    ].join(" ").replace(/\s+/g, " ").trim();
+  }
+
   function isVisible(node) {
     const rect = node.getBoundingClientRect();
     const style = window.getComputedStyle(node);
@@ -100,30 +113,58 @@
     let root = node;
     for (let i = 0; i < 8 && root; i += 1) {
       const text = root.textContent || "";
-      if (text.length > 40 && /(offer|cash back|earn|\$|%|expires|merchant|restaurant|shopping)/i.test(text)) break;
+      if (text.length > 40 && /(offer|cash back|earn|\$|%|expires|merchant|restaurant|shopping|deal|coupon|redeem|activated|added)/i.test(text)) break;
       root = root.parentElement;
     }
     return (root?.textContent || node.textContent || "").replace(/\s+/g, " ").trim().slice(0, 260);
   }
 
+  function getSearchRoots() {
+    const roots = [document];
+    const seen = new Set(roots);
+
+    Array.from(document.querySelectorAll("*")).forEach((node) => {
+      if (node.shadowRoot && !seen.has(node.shadowRoot)) {
+        seen.add(node.shadowRoot);
+        roots.push(node.shadowRoot);
+      }
+    });
+
+    Array.from(document.querySelectorAll("iframe")).forEach((frame) => {
+      try {
+        const doc = frame.contentDocument;
+        if (doc && !seen.has(doc)) {
+          seen.add(doc);
+          roots.push(doc);
+        }
+      } catch (_) {
+        // Cross-origin frames cannot be inspected by this userscript.
+      }
+    });
+
+    return roots;
+  }
+
   function isAddOfferControl(node) {
     if (!isVisible(node) || !isEnabled(node)) return false;
-    const label = [
-      textOf(node),
-      node.getAttribute("aria-label") || "",
-      node.getAttribute("title") || "",
-      node.value || ""
-    ].join(" ");
-
-    if (!/(add to card|add offer|add this offer|activate offer|activate|clip offer|save offer)/i.test(label)) return false;
-    if (/(added|activated|remove|removed|view|details|learn|filter|sort|search|make payment|pay|transfer|download|log out|sign out)/i.test(label)) return false;
-
+    const label = getLabel(node);
     const context = nearbyText(node);
-    return /(offer|cash back|earn|\$|%|expires|merchant|restaurant|shopping|grocery|travel|gas)/i.test(context);
+    const haystack = `${label} ${context}`;
+
+    if (/(added|activated|saved|remove|removed|view|details|learn|filter|sort|search|make payment|pay|transfer|download|log out|sign out|shop now|continue)/i.test(label)) return false;
+    if (/(offer added|offer activated|already added|already activated)/i.test(haystack)) return false;
+
+    const labelLooksAddable = /(add to card|add offer|add this offer|activate offer|activate this offer|clip offer|save offer|activate now)/i.test(label)
+      || (/(^|\s)(add|activate|clip|save)(\s|$)/i.test(label) && /(offer|deal|coupon|merchant|card)/i.test(haystack));
+    if (!labelLooksAddable) return false;
+
+    return /(offer|cash back|earn|\$|%|expires|merchant|restaurant|shopping|grocery|travel|gas|deal|coupon|redeem)/i.test(context);
   }
 
   function getAddButtons() {
-    return Array.from(document.querySelectorAll('button, [role="button"], input[type="button"], input[type="submit"]'))
+    const selector = 'button, [role="button"], input[type="button"], input[type="submit"], a[role="button"]';
+    return getSearchRoots()
+      .flatMap((root) => Array.from(root.querySelectorAll(selector)))
       .filter(isAddOfferControl);
   }
 
@@ -143,13 +184,38 @@
     return [h1, h2, title].filter(Boolean).join(" | ").slice(0, 160);
   }
 
+  function isLoggedOutOrTimedOut() {
+    const pageText = textOf(document.body).slice(0, 2000);
+    return /your session timed out|session timed out|sign in to chase|log on to chase|secure message center sign in/i.test(pageText)
+      || (/\/logon|\/login/i.test(location.href) && /chase/i.test(location.hostname));
+  }
+
+  function debugScan() {
+    const selector = 'button, [role="button"], input[type="button"], input[type="submit"], a[role="button"]';
+    const candidates = getSearchRoots()
+      .flatMap((root) => Array.from(root.querySelectorAll(selector)))
+      .filter((node) => isVisible(node))
+      .map((node) => ({
+        label: getLabel(node).slice(0, 90) || "(no label)",
+        context: nearbyText(node).slice(0, 130),
+        addable: isAddOfferControl(node)
+      }))
+      .filter((item) => item.addable || /(offer|cash back|activate|add|deal|coupon|\$|%)/i.test(`${item.label} ${item.context}`))
+      .slice(0, 20);
+
+    pushLog(`Debug scan: addable=${getAddButtons().length}, candidates=${candidates.length}, timedOut=${isLoggedOutOrTimedOut()}`);
+    candidates.forEach((item, index) => {
+      pushLog(`#${index + 1} ${item.addable ? "ADD" : "skip"} | ${item.label} | ${item.context}`);
+    });
+  }
+
   function refreshPageSummary(force = false) {
     const now = Date.now();
     if (!force && now - pageSummaryCache.updatedAt < 10000) return pageSummaryCache;
 
     pageSummaryCache = {
       addable: getAddButtons().length,
-      page: pageLabel(),
+      page: isLoggedOutOrTimedOut() ? `Logged out / timed out | ${pageLabel()}` : pageLabel(),
       updatedAt: now
     };
     return pageSummaryCache;
@@ -263,6 +329,12 @@
     if (!state.active) return;
 
     await waitForPageReady();
+
+    if (isLoggedOutOrTimedOut()) {
+      pushLog("Chase session is logged out or timed out. Sign in, open Chase Offers, then run again.");
+      setState({ ...state, active: false, phase: "timed-out" });
+      return;
+    }
 
     const delayMs = Number(state.delayMs || 5000);
     const maxClicks = Number(state.maxClicksPerPass || 200);
@@ -432,6 +504,7 @@
         <div>
           <button type="button" data-start>Add Loaded Offers</button>
           <button type="button" data-stop class="danger">Stop</button>
+          <button type="button" data-debug class="secondary">Debug Scan</button>
           <button type="button" data-keepalive class="secondary">Keep Alive On</button>
           <button type="button" data-clear class="secondary">Clear Log</button>
         </div>
@@ -449,6 +522,11 @@
     el.querySelector("[data-stop]").addEventListener("click", (event) => {
       event.preventDefault();
       stopRun();
+    });
+    el.querySelector("[data-debug]").addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      debugScan();
     });
     el.querySelector("[data-keepalive]").addEventListener("click", (event) => {
       event.preventDefault();
@@ -498,6 +576,7 @@
       <div><b>Page:</b> ${summary.page || "unknown"}</div>
       <div><b>Addable:</b> ${summary.addable}</div>
       <div><b>Keep alive:</b> ${keepAlive.enabled ? `${keepAliveMinutes} min, last ${keepAliveAge}` : "off"}</div>
+      ${isLoggedOutOrTimedOut() ? "<div><b>Action:</b> Sign in again and open Chase Offers.</div>" : ""}
     `;
 
     const logBox = panel.querySelector("[data-logs]");
