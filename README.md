@@ -13,6 +13,7 @@ Important lessons from testing:
 - Amex can lazy-load more offers after refresh.
 - Skip checking accounts. Only process credit cards.
 - A slower delay is safer. `5000ms` is a good default; `7000ms` is better after rate-limit errors.
+- Amex can time out during long runs. Keep-alive is enabled by default and sends light page activity every few minutes.
 
 ## Usage
 
@@ -21,6 +22,7 @@ Important lessons from testing:
 3. Use the floating `Amex Native Offers` panel.
 4. Click `Scan Cards` to confirm detected cards.
 5. Click `Add All Cards` to process all detected credit cards.
+6. Leave `Keep Alive On` enabled for long runs. The default interval is `4` minutes.
 
 The script runs card by card:
 
@@ -29,6 +31,12 @@ The script runs card by card:
 3. Reload the same page.
 4. Continue if more offers appear.
 5. Move to the next card only after a refresh shows no more add buttons.
+
+## Keep-alive
+
+The panel includes a `Keep Alive On/Off` button and an interval input in minutes.
+
+When enabled, the script periodically sends light activity to the page. If Amex shows a session prompt such as `Stay logged in` or `Continue session`, the script clicks it.
 
 ## Notes
 

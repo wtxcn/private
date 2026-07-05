@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amex Native Offer Clicker - Refresh Safe
 // @namespace    https://global.americanexpress.com/
-// @version      0.1.0
+// @version      0.2.0
 // @description  Adds Amex Offers by clicking the native Amex UI, with per-card refresh verification.
 // @match        https://global.americanexpress.com/*
 // @grant        none
@@ -13,6 +13,7 @@
 
   const STORE_KEY = "amexNativeOfferClickerState.v1";
   const LOG_KEY = "amexNativeOfferClickerLogs.v1";
+  const KEEP_ALIVE_KEY = "amexNativeOfferClickerKeepAlive.v1";
   const ADD_BUTTON_SELECTOR = 'button[title="add to list card"]';
   const CARD_OPTION_SELECTOR = '[role="option"][data-testid^="simple_switcher_product_option_CARD_PRODUCT_"]';
   const CARD_COMBO_SELECTOR = [
@@ -23,6 +24,8 @@
 
   let panel;
   let abortRequested = false;
+  let keepAliveTimer = null;
+  let lastKeepAliveAt = 0;
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -67,6 +70,16 @@
     render();
   }
 
+  function getKeepAliveConfig() {
+    return loadJson(KEEP_ALIVE_KEY, { enabled: true, intervalMs: 240000 });
+  }
+
+  function setKeepAliveConfig(next) {
+    saveJson(KEEP_ALIVE_KEY, next);
+    scheduleKeepAlive();
+    render();
+  }
+
   function textOf(node) {
     return (node?.innerText || node?.textContent || "").trim().replace(/\s+/g, " ");
   }
@@ -98,6 +111,60 @@
   function countersText() {
     const text = document.body?.innerText || "";
     return (text.match(/Available \(\d+\)|Added to Card \(\d+\)/g) || []).join(", ");
+  }
+
+  function findSessionButton() {
+    const candidates = Array.from(document.querySelectorAll('button, a, [role="button"]'));
+    return candidates.find((node) => {
+      const text = textOf(node);
+      const aria = node.getAttribute?.("aria-label") || "";
+      return /stay logged in|stay signed in|continue session|keep me signed in|yes, continue|i'?m still here/i.test(`${text} ${aria}`);
+    });
+  }
+
+  function dispatchKeepAliveEvents() {
+    const x = Math.max(10, Math.floor(window.innerWidth * 0.65));
+    const y = Math.max(10, Math.floor(window.innerHeight * 0.28));
+    const events = [
+      new MouseEvent("mousemove", { bubbles: true, clientX: x, clientY: y }),
+      new MouseEvent("mouseover", { bubbles: true, clientX: x, clientY: y }),
+      new KeyboardEvent("keydown", { bubbles: true, key: "Shift" }),
+      new KeyboardEvent("keyup", { bubbles: true, key: "Shift" })
+    ];
+    for (const event of events) document.dispatchEvent(event);
+
+    const currentY = window.scrollY;
+    window.scrollBy(0, 1);
+    window.scrollTo(window.scrollX, currentY);
+  }
+
+  function keepAliveTick() {
+    const config = getKeepAliveConfig();
+    if (!config.enabled) return;
+
+    const sessionButton = findSessionButton();
+    if (sessionButton) {
+      sessionButton.click();
+      pushLog("Clicked session keep-alive prompt.");
+    } else {
+      dispatchKeepAliveEvents();
+      pushLog("Sent keep-alive activity.");
+    }
+    lastKeepAliveAt = Date.now();
+    render();
+  }
+
+  function scheduleKeepAlive() {
+    if (keepAliveTimer) {
+      clearInterval(keepAliveTimer);
+      keepAliveTimer = null;
+    }
+
+    const config = getKeepAliveConfig();
+    if (!config.enabled) return;
+
+    const intervalMs = Math.max(60000, Number(config.intervalMs || 240000));
+    keepAliveTimer = setInterval(keepAliveTick, intervalMs);
   }
 
   async function waitForPageReady(timeoutMs = 30000) {
@@ -390,12 +457,14 @@
         <div>
           <label>Delay <input data-delay type="number" min="1000" step="500" value="3500"> ms</label>
           <label>Max <input data-max type="number" min="1" step="10" value="500"></label>
+          <label>Keep alive <input data-keepalive-min type="number" min="1" step="1" value="4"> min</label>
         </div>
         <div>
           <button type="button" data-scan class="secondary">Scan Cards</button>
           <button type="button" data-current>Add Current Card</button>
           <button type="button" data-all>Add All Cards</button>
           <button type="button" data-stop class="danger">Stop</button>
+          <button type="button" data-keepalive class="secondary">Keep Alive On</button>
           <button type="button" data-clear class="secondary">Clear Log</button>
         </div>
         <div class="status" data-status></div>
@@ -421,6 +490,20 @@
       event.preventDefault();
       stopRun();
     });
+    el.querySelector("[data-keepalive]").addEventListener("click", (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      const current = getKeepAliveConfig();
+      const minutes = Number(el.querySelector("[data-keepalive-min]").value || 4);
+      setKeepAliveConfig({ enabled: !current.enabled, intervalMs: Math.max(1, minutes) * 60000 });
+      pushLog(`Keep alive ${!current.enabled ? "enabled" : "disabled"}.`);
+    });
+    el.querySelector("[data-keepalive-min]").addEventListener("change", (event) => {
+      const current = getKeepAliveConfig();
+      const minutes = Number(event.target.value || 4);
+      setKeepAliveConfig({ ...current, intervalMs: Math.max(1, minutes) * 60000 });
+      pushLog(`Keep alive interval set to ${Math.max(1, minutes)} minute(s).`);
+    });
     el.querySelector("[data-clear]").addEventListener("click", clearLogs);
     el.querySelector("[data-hide]").addEventListener("click", () => {
       el.style.display = "none";
@@ -440,13 +523,21 @@
   function render() {
     if (!panel) return;
     const state = getState();
+    const keepAlive = getKeepAliveConfig();
     const logs = getLogs();
     const card = state.currentCard?.label || currentCardText();
+    const keepAliveMinutes = Math.max(1, Math.round(Number(keepAlive.intervalMs || 240000) / 60000));
+    const keepAliveAge = lastKeepAliveAt ? `${Math.round((Date.now() - lastKeepAliveAt) / 1000)}s ago` : "not yet";
+    const keepAliveButton = panel.querySelector("[data-keepalive]");
+    const keepAliveInput = panel.querySelector("[data-keepalive-min]");
+    if (keepAliveButton) keepAliveButton.textContent = keepAlive.enabled ? "Keep Alive On" : "Keep Alive Off";
+    if (keepAliveInput && document.activeElement !== keepAliveInput) keepAliveInput.value = String(keepAliveMinutes);
     panel.querySelector("[data-status]").innerHTML = `
       <div><b>Status:</b> ${state.active ? "running" : (state.phase || "idle")}</div>
       <div><b>Card:</b> ${card}</div>
       <div><b>Queue:</b> ${state.cards ? `${(state.index || 0) + 1}/${state.cards.length}` : "none"}</div>
       <div><b>Page:</b> plus=${addButtonCount()} ${countersText()}</div>
+      <div><b>Keep alive:</b> ${keepAlive.enabled ? `${keepAliveMinutes} min, last ${keepAliveAge}` : "off"}</div>
     `;
     panel.querySelector("[data-logs]").textContent = logs.join("\n");
     panel.querySelector("[data-logs]").scrollTop = panel.querySelector("[data-logs]").scrollHeight;
@@ -455,6 +546,7 @@
   function boot() {
     if (document.getElementById("amex-native-offer-clicker")) return;
     panel = makePanel();
+    scheduleKeepAlive();
     render();
     setInterval(render, 1500);
 
