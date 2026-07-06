@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.2
+// @version      0.2.3
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -136,10 +136,13 @@
 
   function isEditInstitutionPage() {
     const refresh = getRefreshInformationButton();
-    if (!refresh) return false;
+    const back = getBackButton();
+    if (!refresh && !back) return false;
     const detailRoot = getDetailRoot(refresh);
     const detailText = textOf(detailRoot || document.body);
-    return /Edit institution/i.test(detailText) || /Find accounts|Delete institution|Back/i.test(detailText);
+    const bodyText = textOf(document.body);
+    return /Edit institution/i.test(`${detailText} ${bodyText}`)
+      || (/Refresh information/i.test(bodyText) && /Find accounts|Delete institution|Back/i.test(bodyText));
   }
 
   function getClickableLabel(node) {
@@ -191,6 +194,10 @@
   function getRefreshInformationButton() {
     return findActionByText(/^Refresh information$/i, "[id='refresh-connection-btn']")
       || findActionByText(/Refresh information/i, "[id='refresh-connection-btn']");
+  }
+
+  function getBackButton() {
+    return findActionByText(/^Back$/i);
   }
 
   function getDetailRoot(node) {
@@ -317,7 +324,7 @@
   }
 
   function clickBack() {
-    const button = findActionByText(/^Back$/i);
+    const button = getBackButton();
     if (!button) return false;
     button.click();
     return true;
@@ -369,12 +376,28 @@
 
       const backOk = clickBack();
       if (backOk) {
-        pushLog(`Back to list: ${name}`);
+        pushLog(`Clicked Back after refresh: ${name}`);
         setState({ ...getState(), phase: "returning-list", index: (state.index || 0) + 1 });
-        await sleep(1800);
+        const returned = await waitForPage(isEditAccountsPage, 20000);
+        if (!returned) {
+          pushLog("Clicked Back, but the institution list is not visible yet. Stopping so you can inspect the page.");
+          setState({ ...getState(), active: false, phase: "back-did-not-return-list" });
+          return;
+        }
       } else {
         pushLog("Could not find Back button. Stopping so you can inspect the page.");
         setState({ ...getState(), active: false, phase: "needs-manual-back" });
+        return;
+      }
+    }
+
+    if (!isEditAccountsPage() && getBackButton()) {
+      pushLog("On an institution detail page. Clicking Back before continuing.");
+      clickBack();
+      const returned = await waitForPage(isEditAccountsPage, 20000);
+      if (!returned) {
+        pushLog("Back did not return to the institution list. Stopping to avoid bad clicks.");
+        setState({ ...getState(), active: false, phase: "back-did-not-return-list" });
         return;
       }
     }
@@ -461,7 +484,7 @@
 
   function debugScan() {
     pushLog(`Debug: page="${pageLabel()}", editAccounts=${isEditAccountsPage()}, editInstitution=${isEditInstitutionPage()}`);
-    pushLog(`Debug: found ${getInstitutionCards().length} institution candidate(s), refreshButton=${Boolean(getRefreshInformationButton())}, backButton=${Boolean(findActionByText(/^Back$/i))}`);
+    pushLog(`Debug: found ${getInstitutionCards().length} institution candidate(s), refreshButton=${Boolean(getRefreshInformationButton())}, backButton=${Boolean(getBackButton())}`);
   }
 
   function scheduleRender(force = false) {
