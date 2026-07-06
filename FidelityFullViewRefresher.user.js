@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.6
+// @version      0.2.7
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -386,6 +386,37 @@
     return humanClick(button) ? describeNode(button) : "";
   }
 
+  async function returnToInstitutionList(name, context) {
+    const closeOk = clickClose();
+    if (closeOk) {
+      pushLog(`Clicked Close to return to list ${context}: ${name} via ${closeOk}`);
+      await sleep(1500);
+    } else {
+      const backOk = clickBack();
+      if (backOk) {
+        pushLog(`Close not found. Clicked Back to return to list ${context}: ${name} via ${backOk}`);
+        await sleep(1500);
+      } else {
+        pushLog(`Could not find Close or Back on ${name}.`);
+        return false;
+      }
+    }
+
+    let returned = await ensureEditAccountsPage();
+    if (returned) return true;
+
+    if (isEditInstitutionPage()) {
+      const backOk = clickBack();
+      if (backOk) {
+        pushLog(`Still on detail page. Retried Back via ${backOk}.`);
+        await sleep(1500);
+        returned = await ensureEditAccountsPage();
+      }
+    }
+
+    return returned;
+  }
+
   async function waitForPage(predicate, timeoutMs = 20000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
@@ -412,7 +443,7 @@
 
     if (isEditInstitutionPage()) {
       const name = getCurrentInstitutionName() || state.currentName || "institution";
-      if (state.phase !== "refreshing") {
+      if (state.phase !== "refreshing" && state.phase !== "returning-list") {
         const ok = clickRefreshInformation();
         if (ok) {
           pushLog(`Clicked Refresh information: ${name} via ${ok}`);
@@ -423,47 +454,22 @@
         }
       }
 
-      const backOk = clickBack();
-      if (backOk) {
-        pushLog(`Clicked Back after refresh: ${name} via ${backOk}`);
-        setState({ ...getState(), phase: "returning-list", index: (state.index || 0) + 1 });
-        let returned = await waitForPage(isEditAccountsPage, 8000);
-        if (!returned && isEditInstitutionPage()) {
-          const closeOk = clickClose();
-          if (closeOk) {
-            pushLog(`Back did not return to list. Clicked Close fallback via ${closeOk}.`);
-            await sleep(1500);
-            returned = await ensureEditAccountsPage();
-          }
-        }
-        if (!returned) {
-          pushLog("Clicked Back, but the institution list is not visible yet. Stopping so you can inspect the page.");
-          setState({ ...getState(), active: false, phase: "back-did-not-return-list" });
-          return;
-        }
-      } else {
-        pushLog("Could not find Back button. Stopping so you can inspect the page.");
-        setState({ ...getState(), active: false, phase: "needs-manual-back" });
+      setState({ ...getState(), phase: "returning-list" });
+      const returned = await returnToInstitutionList(name, "after refresh");
+      if (!returned) {
+        pushLog("Could not return to the institution list. Stopping so you can inspect the page.");
+        setState({ ...getState(), active: false, phase: "return-failed" });
         return;
       }
+      setState({ ...getState(), phase: "returned-list", index: (state.index || 0) + 1 });
     }
 
     if (!isEditAccountsPage() && getBackButton()) {
-      pushLog("On an institution detail page. Clicking Back before continuing.");
-      const backOk = clickBack();
-      pushLog(`Clicked Back before continuing via ${backOk || "not found"}.`);
-      let returned = await waitForPage(isEditAccountsPage, 8000);
-      if (!returned && isEditInstitutionPage()) {
-        const closeOk = clickClose();
-        if (closeOk) {
-          pushLog(`Back did not return to list. Clicked Close fallback via ${closeOk}.`);
-          await sleep(1500);
-          returned = await ensureEditAccountsPage();
-        }
-      }
+      pushLog("On an institution detail page. Returning to list before continuing.");
+      const returned = await returnToInstitutionList(getState().currentName || "institution", "before continuing");
       if (!returned) {
-        pushLog("Back did not return to the institution list. Stopping to avoid bad clicks.");
-        setState({ ...getState(), active: false, phase: "back-did-not-return-list" });
+        pushLog("Could not return to the institution list. Stopping to avoid bad clicks.");
+        setState({ ...getState(), active: false, phase: "return-failed" });
         return;
       }
     }
