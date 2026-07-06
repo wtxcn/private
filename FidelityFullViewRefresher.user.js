@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.7
+// @version      0.2.8
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -315,21 +315,39 @@
   }
 
   function findEditAccountsButton() {
-    return findByText(/^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i)
+    return getAllCandidates("button, a, [role='button'], [tabindex], pvd3-button")
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .find((node) => /^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i.test(textOf(node)))
+      || findByText(/^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i)
       || findByText(/Edit\/Link Accounts|Edit non-Fidelity accounts/i);
   }
 
-  async function ensureEditAccountsPage() {
+  function visibleActionLabels(limit = 10) {
+    return getAllCandidates("button, a, [role='button'], [tabindex], pvd3-button")
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .map((node) => textOf(node) || node.getAttribute("aria-label") || node.id || node.tagName?.toLowerCase() || "")
+      .filter(Boolean)
+      .slice(0, limit)
+      .join(" | ");
+  }
+
+  async function ensureEditAccountsPage(timeoutMs = 20000) {
     if (isEditAccountsPage()) return true;
 
-    const button = findEditAccountsButton();
-    if (!button) return false;
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const button = findEditAccountsButton();
+      if (button) {
+        const clicked = humanClick(button) ? describeNode(button) : "";
+        pushLog(`Opened Edit accounts via ${clicked || "unknown"}.`);
+        return waitForPage(isEditAccountsPage, 20000);
+      }
 
-    button.scrollIntoView({ block: "center", inline: "nearest" });
-    await sleep(300);
-    button.click();
-    pushLog("Opened Edit accounts.");
-    return waitForPage(isEditAccountsPage, 20000);
+      await sleep(500);
+    }
+
+    pushLog(`Could not find Edit/Link Accounts. Visible actions: ${visibleActionLabels() || "none"}`);
+    return false;
   }
 
   function getQueue() {
