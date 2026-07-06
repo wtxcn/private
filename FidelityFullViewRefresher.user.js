@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.1
+// @version      0.2.2
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -131,7 +131,7 @@
   function isEditAccountsPage() {
     const body = textOf(document.body).slice(0, 3000);
     return (/Edit accounts/i.test(body) && /Linked\s*\(\d+\s+institutions?\)/i.test(body))
-      || getInstitutionCards().length > 0;
+      || getInstitutionCards().length >= 1;
   }
 
   function isEditInstitutionPage() {
@@ -234,28 +234,20 @@
     return text.length > 1 && text.length < 180;
   }
 
-  function looksLikeInstitutionCard(node) {
-    if (!isVisible(node)) return false;
-    const text = textOf(node);
-    if (text.length < 3 || text.length > 650) return false;
-    if (!/(Bank|Credit|Card|Brokerage|Financial|Mortgage|Loan|Checking|Savings|Invest|Retirement|Institution|Citibank|Ally|Chase|American Express|Capital One|Discover|Synchrony|Apple|SoFi|Vanguard|Schwab|Robinhood|Treasury|Venmo|PayPal|Coinbase|Fidelity)/i.test(text)) return false;
-    if (/(Add more accounts|Edit accounts|Linked \(\d+ institutions?\)|Delete institution|Refresh information|Find accounts|Back|Net Worth|Spending|Budget)/i.test(text)) return false;
-    return true;
-  }
-
   function getInstitutionCards() {
     const gridCards = getAllCandidates("div.grid[role='button']").filter(isInstitutionGrid);
-    const source = gridCards.length > 0
-      ? gridCards
-      : getAllCandidates("button, a, [role='button'], [tabindex='0'], div, section, article").filter(looksLikeInstitutionCard);
-
-    const raw = source
+    const seen = new Set();
+    return gridCards
+      .filter((node) => {
+        const key = node.id || textOf(node);
+        if (!key || seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
       .map((node) => {
-        const clickable = isInstitutionGrid(node) ? node : closestClickable(node);
         const text = textOf(node);
         const id = node.id || "";
-        const lines = text.split(/\s{2,}|\n/).map((part) => part.trim()).filter(Boolean);
-        const rawName = isInstitutionGrid(node) ? text || id : (lines[0] || text);
+        const rawName = text || id;
         const name = rawName
           .replace(/\s+-\s+via\s+.+$/i, "")
           .replace(/\$[\d,.-]+/g, "")
@@ -263,18 +255,8 @@
           .replace(/\s+/g, " ")
           .trim()
           .slice(0, 120);
-        return { node, clickable, name, text };
+        return { node, clickable: node, name, text };
       });
-
-    if (gridCards.length > 0) return raw;
-
-    const seen = new Set();
-    return raw.filter((item) => {
-      const key = item.name || item.text.slice(0, 80);
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
   }
 
   function findEditAccountsButton() {
