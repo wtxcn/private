@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.8
+// @version      0.2.9
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -14,6 +14,7 @@
 (function () {
   "use strict";
 
+  const VERSION = "0.2.9";
   const STORE_KEY = "fidelityFullViewRefresherState.v1";
   const LOG_KEY = "fidelityFullViewRefresherLogs.v1";
   const QUEUE_KEY = "fidelityFullViewRefresherQueue.v1";
@@ -314,10 +315,15 @@
       });
   }
 
+  function nearestActionButton(node) {
+    return node?.closest?.("button, a, [role='button'], [tabindex], pvd3-button") || node;
+  }
+
   function findEditAccountsButton() {
-    return getAllCandidates("button, a, [role='button'], [tabindex], pvd3-button")
+    const textNode = getAllCandidates("button, a, [role='button'], [tabindex], pvd3-button, span, div")
       .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
-      .find((node) => /^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i.test(textOf(node)))
+      .find((node) => /^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i.test(textOf(node)));
+    return nearestActionButton(textNode)
       || findByText(/^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i)
       || findByText(/Edit\/Link Accounts|Edit non-Fidelity accounts/i);
   }
@@ -331,19 +337,25 @@
       .join(" | ");
   }
 
-  async function ensureEditAccountsPage(timeoutMs = 20000) {
+  async function ensureEditAccountsPage(timeoutMs = 30000) {
     if (isEditAccountsPage()) return true;
 
     const start = Date.now();
+    let attempt = 0;
     while (Date.now() - start < timeoutMs) {
+      if (isEditAccountsPage()) return true;
+
       const button = findEditAccountsButton();
       if (button) {
+        attempt += 1;
         const clicked = humanClick(button) ? describeNode(button) : "";
-        pushLog(`Opened Edit accounts via ${clicked || "unknown"}.`);
-        return waitForPage(isEditAccountsPage, 20000);
+        pushLog(`Clicked Edit/Link Accounts attempt ${attempt} via ${clicked || "unknown"}.`);
+        const ready = await waitForPage(isEditAccountsPage, 5000);
+        if (ready) return true;
+        pushLog(`Edit accounts list not visible after attempt ${attempt}. Retrying.`);
       }
 
-      await sleep(500);
+      await sleep(700);
     }
 
     pushLog(`Could not find Edit/Link Accounts. Visible actions: ${visibleActionLabels() || "none"}`);
@@ -559,7 +571,7 @@
       maxItems: Number(panel.querySelector("[data-max]").value || 100),
       startedAt: Date.now()
     });
-    pushLog("Starting Fidelity Full View refresh run.");
+    pushLog(`Starting Fidelity Full View refresh run v${VERSION}.`);
     processQueue().catch((error) => {
       pushLog(`Error: ${error.message}`);
       setState({ ...getState(), active: false, phase: "error" });
@@ -733,6 +745,7 @@
 
     panel.querySelector("[data-status]").innerHTML = `
       <div><b>Status:</b> ${state.active ? "running" : (state.phase || "idle")}</div>
+      <div><b>Version:</b> ${VERSION}</div>
       <div><b>Page:</b> ${pageLabel()}</div>
       <div><b>Queue:</b> ${queue.length ? `${Math.min(index + 1, queue.length)}/${queue.length}` : "not scanned"}</div>
       <div><b>Current:</b> ${state.currentName || "-"}</div>
