@@ -54,13 +54,15 @@ These scripts do not make purchases or payments. They only add available offers 
 2. Open the Chase Offers page for the card/account you want to process.
 3. Use the floating `Chase Offers` panel.
 4. Click `Add Loaded Offers`.
+5. To run across cards, click `Add All Cards`. The script opens account overview, scans Chase account IDs, then tries each Offers Hub.
 
 The Chase script is intentionally conservative:
 
 - It does not call Chase private APIs.
-- It only clicks visible native controls matching labels like `Add to card`, `Add offer`, or `Activate offer`.
+- It only clicks visible Chase Offers Hub tiles marked `Add offer`.
+- It skips tiles already marked `Success Added`.
 - It scrolls slowly to load more offers.
 - It reloads once to verify whether more addable offers appear.
 - It shows a timeout warning when Chase has logged out.
 - `Debug Scan` logs the offer-like controls it can see without clicking them.
-- It does not yet auto-switch Chase cards/accounts because Chase's account selector structure needs to be verified on the live page.
+- `Scan Cards` stores account ID candidates found on the current Chase overview page.
