@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.9
+// @version      0.3.1
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -14,7 +14,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.2.9";
+  const VERSION = "0.3.1";
   const STORE_KEY = "fidelityFullViewRefresherState.v1";
   const LOG_KEY = "fidelityFullViewRefresherLogs.v1";
   const QUEUE_KEY = "fidelityFullViewRefresherQueue.v1";
@@ -316,15 +316,28 @@
   }
 
   function nearestActionButton(node) {
-    return node?.closest?.("button, a, [role='button'], [tabindex], pvd3-button") || node;
+    if (!node) return null;
+    const parentAction = node.closest?.("button, a, [role='button'], [tabindex], pvd3-button");
+    if (parentAction && parentAction !== node) return parentAction;
+    if (node.matches?.("button, a, [role='button'], [tabindex], pvd3-button")) return node;
+
+    const childAction = Array.from(node.querySelectorAll?.("button, a, [role='button'], [tabindex], pvd3-button") || [])
+      .find((child) => !isOwnPanel(child) && isVisible(child) && isEnabled(child));
+    return childAction || node;
   }
 
   function findEditAccountsButton() {
-    const textNode = getAllCandidates("button, a, [role='button'], [tabindex], pvd3-button, span, div")
+    const exactText = /^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i;
+    const primaryAction = getAllCandidates("button, a, [role='button'], [tabindex], pvd3-button")
       .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
-      .find((node) => /^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i.test(textOf(node)));
+      .find((node) => exactText.test(textOf(node)) || exactText.test(getClickableLabel(node)));
+    if (primaryAction) return primaryAction;
+
+    const textNode = getAllCandidates("span, div")
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .find((node) => exactText.test(textOf(node)));
     return nearestActionButton(textNode)
-      || findByText(/^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i)
+      || findByText(exactText)
       || findByText(/Edit\/Link Accounts|Edit non-Fidelity accounts/i);
   }
 
