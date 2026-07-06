@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.3.1
+// @version      0.3.2
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -14,7 +14,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.3.1";
+  const VERSION = "0.3.2";
   const STORE_KEY = "fidelityFullViewRefresherState.v1";
   const LOG_KEY = "fidelityFullViewRefresherLogs.v1";
   const QUEUE_KEY = "fidelityFullViewRefresherQueue.v1";
@@ -327,10 +327,19 @@
   }
 
   function findEditAccountsButton() {
+    const preferredText = /^Edit non-Fidelity accounts$/i;
+    const fallbackText = /^Edit\/Link Accounts$/i;
+    const findAction = (pattern) => getAllCandidates("button, a, [role='button'], [tabindex], pvd3-button")
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .find((node) => pattern.test(textOf(node)) || pattern.test(getClickableLabel(node)));
+
+    const preferredAction = findAction(preferredText);
+    if (preferredAction) return preferredAction;
+
     const exactText = /^(Edit\/Link Accounts|Edit non-Fidelity accounts)$/i;
     const primaryAction = getAllCandidates("button, a, [role='button'], [tabindex], pvd3-button")
       .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
-      .find((node) => exactText.test(textOf(node)) || exactText.test(getClickableLabel(node)));
+      .find((node) => fallbackText.test(textOf(node)) || fallbackText.test(getClickableLabel(node)) || exactText.test(textOf(node)) || exactText.test(getClickableLabel(node)));
     if (primaryAction) return primaryAction;
 
     const textNode = getAllCandidates("span, div")
