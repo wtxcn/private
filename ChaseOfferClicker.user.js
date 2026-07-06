@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Native Offer Clicker - Refresh Safe
 // @namespace    https://www.chase.com/
-// @version      0.2.0
+// @version      0.2.1
 // @description  Adds Chase Offers by clicking native Chase offer tiles slowly, with all-card queue support.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -14,6 +14,7 @@
 (function () {
   "use strict";
 
+  const VERSION = "0.2.1";
   const STORE_KEY = "chaseOfferClickerState.v1";
   const LOG_KEY = "chaseOfferClickerLogs.v1";
   const KEEP_ALIVE_KEY = "chaseOfferClickerKeepAlive.v1";
@@ -22,6 +23,7 @@
   let panel;
   let abortRequested = false;
   let renderQueued = false;
+  let processInFlight = false;
   let keepAliveTimer = null;
   let lastKeepAliveAt = 0;
   let pageSummaryCache = {
@@ -156,7 +158,9 @@
   }
 
   function getCurrentAccountId() {
-    const match = location.href.match(/[?&]accountId=(\d+)/);
+    const decodedHref = typeof decodeURIComponent === "function" ? decodeURIComponent(location.href) : location.href;
+    const match = location.href.match(/[?&]accountId=(\d+)/i)
+      || decodedHref.match(/[?&]accountId=(\d+)/i);
     return match ? match[1] : "";
   }
 
@@ -165,7 +169,13 @@
   }
 
   function isOffersHubPage() {
-    return /\/merchantOffers\/offerCategoriesPage/i.test(location.hash || location.href);
+    const route = location.hash || location.href;
+    if (/\/merchantOffers\/offerCategoriesPage/i.test(route)) return true;
+    const bodyText = textOf(document.body).slice(0, 2000);
+    return /Offer status/i.test(bodyText)
+      && /Added to card/i.test(bodyText)
+      && /Not added/i.test(bodyText)
+      && document.querySelectorAll('[data-testid="commerce-tile"]').length > 0;
   }
 
   function isOverviewPage() {
@@ -178,7 +188,17 @@
     if (current) ids.push(current);
 
     const html = document.documentElement.innerHTML || "";
-    Array.from(html.matchAll(/accountId[^0-9]{0,30}(\d{4,})/gi)).forEach((match) => ids.push(match[1]));
+    [
+      /accountId[^0-9]{0,80}(\d{4,})/gi,
+      /accountIdentifier[^0-9]{0,80}(\d{4,})/gi,
+      /accountReferenceId[^0-9]{0,80}(\d{4,})/gi,
+      /accounts-name-link-button-(\d{4,})/gi,
+      /account-tile-navigation-button-requestCardPayment-(\d{4,})/gi,
+      /currentBalance-(\d{4,})-popover-anchor/gi,
+      /five-percent-cashback-link-(\d{4,})-/gi
+    ].forEach((pattern) => {
+      Array.from(html.matchAll(pattern)).forEach((match) => ids.push(match[1]));
+    });
 
     return Array.from(new Set(ids));
   }
@@ -358,6 +378,32 @@
     return false;
   }
 
+  async function waitForHubReady(accountId = "", timeoutMs = 30000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      const current = getCurrentAccountId();
+      const accountMatches = !accountId || !current || current === String(accountId);
+      if (isOffersHubPage() && accountMatches && (getAddButtons().length > 0 || /offers/i.test(pageLabel()))) return true;
+      await sleep(500);
+    }
+    return false;
+  }
+
+  function runActiveProcess(delayMs = 1000) {
+    window.setTimeout(() => {
+      if (processInFlight) return;
+      processInFlight = true;
+      resumeAfterRefresh()
+        .catch((error) => {
+          pushLog(`Error: ${error.message}`);
+          setState({ ...getState(), active: false, phase: "error" });
+        })
+        .finally(() => {
+          processInFlight = false;
+        });
+    }, delayMs);
+  }
+
   function currentQueueAccount(state) {
     const queue = Array.isArray(state.accountIds) ? state.accountIds : [];
     return queue[state.queueIndex || 0] || state.accountId || getCurrentAccountId();
@@ -392,6 +438,7 @@
 
     const name = getOfferName(button);
     const hubUrl = isOffersHubPage() ? location.href : "";
+    const hubAccountId = getCurrentAccountId();
     button.scrollIntoView({ block: "center", inline: "nearest" });
     await sleep(400);
     button.click();
@@ -401,6 +448,12 @@
     if (hubUrl && location.href !== hubUrl) {
       pushLog("Returned to Offers Hub after Chase opened the offer detail page.");
       location.assign(hubUrl);
+      const ready = await waitForHubReady(hubAccountId, 30000);
+      if (!ready) {
+        pushLog("Waiting for Offers Hub after detail page took too long.");
+        return false;
+      }
+      await sleep(800);
     }
 
     return true;
@@ -586,10 +639,7 @@
       location.assign(offerHubUrl(accountId));
       return;
     }
-    resumeAfterRefresh().catch((error) => {
-      pushLog(`Error: ${error.message}`);
-      setState({ ...getState(), active: false, phase: "error" });
-    });
+    runActiveProcess(100);
   }
 
   function stopRun() {
@@ -775,6 +825,7 @@
 
     panel.querySelector("[data-status]").innerHTML = `
       <div><b>Status:</b> ${state.active ? "running" : (state.phase || "idle")}</div>
+      <div><b>Version:</b> ${VERSION}</div>
       <div><b>Page:</b> ${summary.page || "unknown"}</div>
       <div><b>Queue:</b> ${queueText}; scanned ${accountIds.length}</div>
       <div><b>Addable:</b> ${summary.addable}</div>
@@ -796,14 +847,24 @@
     scheduleKeepAlive();
     render(true);
     setInterval(() => scheduleRender(false), 5000);
+    setInterval(() => {
+      const state = getState();
+      if (state.active && !processInFlight && isOffersHubPage() && getAddButtons().length > 0) {
+        pushLog("Active run detected addable offers on Hub; continuing.");
+        runActiveProcess(500);
+      }
+    }, 15000);
+
+    ["hashchange", "popstate"].forEach((eventName) => {
+      window.addEventListener(eventName, () => {
+        if (getState().active) runActiveProcess(1500);
+      });
+    });
 
     const state = getState();
     if (state.active) {
       pushLog("Resuming saved run after navigation/refresh.");
-      setTimeout(() => resumeAfterRefresh().catch((error) => {
-        pushLog(`Error: ${error.message}`);
-        setState({ ...getState(), active: false, phase: "error" });
-      }), 2500);
+      runActiveProcess(2500);
     }
   }
 
