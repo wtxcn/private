@@ -6,6 +6,7 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 
 - `AmexNativeOfferClicker.user.js`: Amex Offers helper.
 - `ChaseOfferClicker.user.js`: Chase Offers helper for the currently loaded Chase Offers page.
+- `FidelityFullViewRefresher.user.js`: Fidelity Full View helper for refreshing linked institutions.
 
 ## Why this script exists
 
@@ -66,3 +67,17 @@ The Chase script is intentionally conservative:
 - It shows a timeout warning when Chase has logged out.
 - `Debug Scan` logs the offer-like controls it can see without clicking them.
 - `Scan Cards` stores account ID candidates found on the current Chase overview page.
+
+## Fidelity Full View Usage
+
+1. Install `FidelityFullViewRefresher.user.js` in Tampermonkey.
+2. Open Fidelity Full View `Edit accounts`.
+3. Click `Scan Institutions`.
+4. Click `Refresh All`.
+
+The Fidelity script is intentionally UI-only:
+
+- It does not call Fidelity or aggregation APIs directly.
+- It scans visible linked institution cards.
+- It opens each institution, clicks the native `Refresh information` control, waits, then clicks `Back`.
+- If Fidelity asks for credentials, MFA, or manual repair, the script stops so you can handle it.

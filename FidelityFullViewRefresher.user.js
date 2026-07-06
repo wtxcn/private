@@ -1,0 +1,554 @@
+// ==UserScript==
+// @name         Fidelity Full View Refresher
+// @namespace    https://digital.fidelity.com/
+// @version      0.1.0
+// @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
+// @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
+// @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
+// @updateURL    https://raw.githubusercontent.com/DemingYan/private/main/FidelityFullViewRefresher.user.js
+// @downloadURL  https://raw.githubusercontent.com/DemingYan/private/main/FidelityFullViewRefresher.user.js
+// @grant        none
+// @run-at       document-idle
+// ==/UserScript==
+
+(function () {
+  "use strict";
+
+  const STORE_KEY = "fidelityFullViewRefresherState.v1";
+  const LOG_KEY = "fidelityFullViewRefresherLogs.v1";
+  const QUEUE_KEY = "fidelityFullViewRefresherQueue.v1";
+
+  let panel;
+  let abortRequested = false;
+  let renderQueued = false;
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function loadJson(key, fallback) {
+    try {
+      return JSON.parse(localStorage.getItem(key) || "") || fallback;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  function saveJson(key, value) {
+    localStorage.setItem(key, JSON.stringify(value));
+  }
+
+  function getState() {
+    return loadJson(STORE_KEY, { active: false, phase: "idle" });
+  }
+
+  function setState(next) {
+    saveJson(STORE_KEY, next);
+    scheduleRender();
+  }
+
+  function getLogs() {
+    return loadJson(LOG_KEY, []);
+  }
+
+  function pushLog(message) {
+    const stamp = new Date().toLocaleTimeString();
+    const logs = getLogs();
+    logs.push(`[${stamp}] ${message}`);
+    saveJson(LOG_KEY, logs.slice(-300));
+    scheduleRender();
+  }
+
+  function clearLogs(event) {
+    event?.preventDefault();
+    event?.stopPropagation();
+    saveJson(LOG_KEY, []);
+    panel?.querySelector("[data-logs]")?.replaceChildren();
+    scheduleRender(true);
+  }
+
+  function textOf(node) {
+    return (node?.innerText || node?.textContent || "").trim().replace(/\s+/g, " ");
+  }
+
+  function isVisible(node) {
+    if (!node || !node.getBoundingClientRect) return false;
+    const rect = node.getBoundingClientRect();
+    const style = window.getComputedStyle(node);
+    return rect.width > 0 && rect.height > 0 && style.visibility !== "hidden" && style.display !== "none";
+  }
+
+  function isEnabled(node) {
+    return !node.disabled && node.getAttribute("aria-disabled") !== "true";
+  }
+
+  function getSearchRoots() {
+    const roots = [document];
+    const seen = new Set(roots);
+
+    Array.from(document.querySelectorAll("*")).forEach((node) => {
+      if (node.shadowRoot && !seen.has(node.shadowRoot)) {
+        seen.add(node.shadowRoot);
+        roots.push(node.shadowRoot);
+      }
+    });
+
+    Array.from(document.querySelectorAll("iframe")).forEach((frame) => {
+      try {
+        const doc = frame.contentDocument;
+        if (doc && !seen.has(doc)) {
+          seen.add(doc);
+          roots.push(doc);
+        }
+      } catch (_) {
+        // Cross-origin frames cannot be inspected from a userscript.
+      }
+    });
+
+    return roots;
+  }
+
+  function getAllCandidates(selector) {
+    return getSearchRoots().flatMap((root) => Array.from(root.querySelectorAll(selector)));
+  }
+
+  function pageLabel() {
+    const headings = Array.from(document.querySelectorAll("h1,h2,[role='heading']"))
+      .filter(isVisible)
+      .map(textOf)
+      .filter(Boolean);
+    return headings.slice(0, 2).join(" | ") || document.title || location.pathname;
+  }
+
+  function isEditAccountsPage() {
+    const body = textOf(document.body).slice(0, 3000);
+    return /Edit accounts/i.test(body) && /Linked\s*\(\d+\s+institutions?\)/i.test(body);
+  }
+
+  function isEditInstitutionPage() {
+    const body = textOf(document.body).slice(0, 2000);
+    return /Edit institution/i.test(body) && /Refresh information/i.test(body);
+  }
+
+  function getClickableLabel(node) {
+    return [
+      textOf(node),
+      node.getAttribute("aria-label") || "",
+      node.getAttribute("title") || "",
+      node.getAttribute("data-testid") || "",
+      node.id || ""
+    ].join(" ").replace(/\s+/g, " ").trim();
+  }
+
+  function findByText(pattern) {
+    const selector = "button, a, [role='button'], [tabindex], input[type='button'], input[type='submit']";
+    return getAllCandidates(selector)
+      .filter((node) => isVisible(node) && isEnabled(node))
+      .find((node) => pattern.test(getClickableLabel(node)));
+  }
+
+  function closestClickable(node) {
+    let current = node;
+    for (let i = 0; i < 8 && current; i += 1) {
+      const tag = current.tagName?.toLowerCase();
+      const role = current.getAttribute?.("role") || "";
+      const tabindex = current.getAttribute?.("tabindex");
+      if (tag === "button" || tag === "a" || role === "button" || tabindex === "0") return current;
+      current = current.parentElement;
+    }
+    return node;
+  }
+
+  function looksLikeInstitutionCard(node) {
+    if (!isVisible(node)) return false;
+    const text = textOf(node);
+    if (text.length < 3 || text.length > 650) return false;
+    if (!/(Bank|Credit|Card|Brokerage|Financial|Mortgage|Loan|Checking|Savings|Invest|Retirement|Institution|Citibank|Ally|Chase|American Express|Capital One|Discover|Synchrony|Apple|SoFi|Vanguard|Schwab|Robinhood|Treasury|Venmo|PayPal|Coinbase|Fidelity)/i.test(text)) return false;
+    if (/(Add more accounts|Edit accounts|Linked \(\d+ institutions?\)|Delete institution|Refresh information|Find accounts|Back|Net Worth|Spending|Budget)/i.test(text)) return false;
+    return true;
+  }
+
+  function getInstitutionCards() {
+    const raw = getAllCandidates("button, a, [role='button'], [tabindex='0'], div, section, article")
+      .filter(looksLikeInstitutionCard)
+      .map((node) => {
+        const clickable = closestClickable(node);
+        const text = textOf(node);
+        const lines = text.split(/\s{2,}|\n/).map((part) => part.trim()).filter(Boolean);
+        const name = (lines[0] || text)
+          .replace(/\$[\d,.-]+/g, "")
+          .replace(/\b(Cash Equivalent|Checking|Savings|Credit Card|Brokerage|Loan|Mortgage)\b.*$/i, "")
+          .replace(/\s+/g, " ")
+          .trim()
+          .slice(0, 120);
+        return { node, clickable, name, text };
+      });
+
+    const seen = new Set();
+    return raw.filter((item) => {
+      const key = item.name || item.text.slice(0, 80);
+      if (!key || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+  }
+
+  function getQueue() {
+    return loadJson(QUEUE_KEY, []);
+  }
+
+  function setQueue(queue) {
+    saveJson(QUEUE_KEY, queue);
+    scheduleRender(true);
+  }
+
+  function scanInstitutions() {
+    const queue = getInstitutionCards().map((item, index) => ({
+      index,
+      name: item.name || `Institution ${index + 1}`
+    }));
+    setQueue(queue);
+    pushLog(`Scanned ${queue.length} institution candidate(s).`);
+    queue.slice(0, 20).forEach((item, index) => pushLog(`#${index + 1}: ${item.name}`));
+    if (queue.length > 20) pushLog(`...and ${queue.length - 20} more.`);
+    return queue;
+  }
+
+  function getCurrentInstitutionName() {
+    if (!isEditInstitutionPage()) return "";
+    const heading = Array.from(document.querySelectorAll("h1,h2,[role='heading']")).find((node) => /Edit institution/i.test(textOf(node)));
+    const body = textOf(document.body);
+    const withoutHeading = body.replace(/.*Edit institution\s*/i, "");
+    const firstLine = withoutHeading.split(/Updated\s+|Refresh information|Find accounts|Delete institution|Back/i)[0] || "";
+    return firstLine.replace(/\s+/g, " ").trim().slice(0, 120) || textOf(heading);
+  }
+
+  function clickBack() {
+    const button = findByText(/^Back$/i);
+    if (!button) return false;
+    button.click();
+    return true;
+  }
+
+  function clickRefreshInformation() {
+    const button = findByText(/Refresh information/i);
+    if (!button) return false;
+    button.click();
+    return true;
+  }
+
+  async function waitForPage(predicate, timeoutMs = 20000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (predicate()) return true;
+      await sleep(500);
+    }
+    return false;
+  }
+
+  async function openInstitutionAt(index) {
+    const cards = getInstitutionCards();
+    const item = cards[index];
+    if (!item) return false;
+    item.clickable.scrollIntoView({ block: "center", inline: "nearest" });
+    await sleep(400);
+    item.clickable.click();
+    pushLog(`Opened: ${item.name || `institution #${index + 1}`}`);
+    return true;
+  }
+
+  async function processQueue() {
+    const state = getState();
+    if (!state.active) return;
+
+    if (isEditInstitutionPage()) {
+      const name = getCurrentInstitutionName() || state.currentName || "institution";
+      if (state.phase !== "refreshing") {
+        const ok = clickRefreshInformation();
+        if (ok) {
+          pushLog(`Clicked Refresh information: ${name}`);
+          setState({ ...state, phase: "refreshing", currentName: name });
+          await sleep(Number(state.delayMs || 8000));
+        } else {
+          pushLog(`Could not find Refresh information on ${name}.`);
+        }
+      }
+
+      const backOk = clickBack();
+      if (backOk) {
+        pushLog(`Back to list: ${name}`);
+        setState({ ...getState(), phase: "returning-list", index: (state.index || 0) + 1 });
+        await sleep(1800);
+      } else {
+        pushLog("Could not find Back button. Stopping so you can inspect the page.");
+        setState({ ...getState(), active: false, phase: "needs-manual-back" });
+        return;
+      }
+    }
+
+    const onList = await waitForPage(isEditAccountsPage, 20000);
+    if (!onList) {
+      pushLog("Not on Edit accounts list yet. Waiting/stopping to avoid bad clicks.");
+      setState({ ...getState(), active: false, phase: "not-on-list" });
+      return;
+    }
+
+    let nextState = getState();
+    let queue = getQueue();
+    if (queue.length === 0) queue = scanInstitutions();
+
+    const maxItems = Number(nextState.maxItems || 100);
+    const index = Number(nextState.index || 0);
+    if (index >= queue.length || index >= maxItems) {
+      pushLog(`Done. Processed ${Math.min(index, queue.length)} of ${queue.length} institution candidate(s).`);
+      setState({ ...nextState, active: false, phase: "done" });
+      return;
+    }
+
+    if (abortRequested) {
+      pushLog("Stopped by user.");
+      setState({ ...nextState, active: false, phase: "stopped" });
+      return;
+    }
+
+    const opened = await openInstitutionAt(index);
+    if (!opened) {
+      pushLog(`Could not open institution #${index + 1}. Skipping.`);
+      setState({ ...nextState, index: index + 1, phase: "skip-open-failed" });
+      setTimeout(() => processQueue().catch((error) => pushLog(`Error: ${error.message}`)), 800);
+      return;
+    }
+
+    nextState = getState();
+    setState({ ...nextState, phase: "opening-institution", currentName: queue[index]?.name || `Institution ${index + 1}` });
+    const detailReady = await waitForPage(isEditInstitutionPage, 20000);
+    if (!detailReady) {
+      pushLog(`Institution #${index + 1} did not open to a refresh page. Skipping after returning if possible.`);
+      clickBack();
+      setState({ ...getState(), index: index + 1, phase: "skip-no-refresh-page" });
+      setTimeout(() => processQueue().catch((error) => pushLog(`Error: ${error.message}`)), 1600);
+      return;
+    }
+
+    setTimeout(() => processQueue().catch((error) => {
+      pushLog(`Error: ${error.message}`);
+      setState({ ...getState(), active: false, phase: "error" });
+    }), 600);
+  }
+
+  function startRun() {
+    abortRequested = false;
+    let queue = getQueue();
+    if (queue.length === 0 && isEditAccountsPage()) queue = scanInstitutions();
+
+    setState({
+      active: true,
+      phase: "starting",
+      index: 0,
+      delayMs: Number(panel.querySelector("[data-delay]").value || 8000),
+      maxItems: Number(panel.querySelector("[data-max]").value || 100),
+      startedAt: Date.now()
+    });
+    pushLog("Starting Fidelity Full View refresh run.");
+    processQueue().catch((error) => {
+      pushLog(`Error: ${error.message}`);
+      setState({ ...getState(), active: false, phase: "error" });
+    });
+  }
+
+  function stopRun() {
+    abortRequested = true;
+    setState({ ...getState(), active: false, phase: "stopped" });
+    pushLog("Stop requested.");
+  }
+
+  function debugScan() {
+    pushLog(`Debug: page="${pageLabel()}", editAccounts=${isEditAccountsPage()}, editInstitution=${isEditInstitutionPage()}`);
+    pushLog(`Debug: found ${getInstitutionCards().length} institution candidate(s), refreshButton=${Boolean(findByText(/Refresh information/i))}, backButton=${Boolean(findByText(/^Back$/i))}`);
+  }
+
+  function scheduleRender(force = false) {
+    if (!panel) return;
+    if (force) {
+      render();
+      return;
+    }
+    if (renderQueued) return;
+    renderQueued = true;
+    window.setTimeout(() => {
+      renderQueued = false;
+      render();
+    }, 250);
+  }
+
+  function makePanel() {
+    const el = document.createElement("div");
+    el.id = "fidelity-full-view-refresher";
+    el.innerHTML = `
+      <style>
+        #fidelity-full-view-refresher {
+          position: fixed;
+          z-index: 2147483647;
+          right: 18px;
+          top: 92px;
+          width: 370px;
+          color: #111827;
+          background: #fff;
+          border: 1px solid #cbd5e1;
+          border-radius: 8px;
+          box-shadow: 0 12px 30px rgba(15, 23, 42, 0.22);
+          font-family: Arial, sans-serif;
+          font-size: 13px;
+        }
+        #fidelity-full-view-refresher header {
+          display: flex;
+          justify-content: space-between;
+          align-items: center;
+          padding: 10px 12px;
+          border-bottom: 1px solid #e5e7eb;
+          font-weight: 700;
+        }
+        #fidelity-full-view-refresher main { padding: 10px 12px; }
+        #fidelity-full-view-refresher button {
+          margin: 4px 4px 4px 0;
+          padding: 7px 10px;
+          border: 1px solid #2e7d32;
+          border-radius: 6px;
+          background: #2e7d32;
+          color: white;
+          cursor: pointer;
+          font-size: 12px;
+        }
+        #fidelity-full-view-refresher button.secondary {
+          background: #fff;
+          color: #2e7d32;
+        }
+        #fidelity-full-view-refresher button.danger {
+          border-color: #b91c1c;
+          background: #b91c1c;
+        }
+        #fidelity-full-view-refresher label {
+          display: inline-flex;
+          align-items: center;
+          gap: 5px;
+          margin-right: 8px;
+        }
+        #fidelity-full-view-refresher input {
+          width: 72px;
+          padding: 5px;
+          border: 1px solid #cbd5e1;
+          border-radius: 5px;
+        }
+        #fidelity-full-view-refresher .status {
+          margin: 8px 0;
+          padding: 8px;
+          border-radius: 6px;
+          background: #f8fafc;
+          border: 1px solid #e5e7eb;
+          line-height: 1.35;
+        }
+        #fidelity-full-view-refresher .logs {
+          height: 180px;
+          overflow: auto;
+          white-space: pre-wrap;
+          background: #0f172a;
+          color: #e5e7eb;
+          padding: 8px;
+          border-radius: 6px;
+          font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+          font-size: 11px;
+        }
+      </style>
+      <header>
+        <span>Fidelity Full View</span>
+        <button type="button" class="secondary" data-hide>Hide</button>
+      </header>
+      <main>
+        <div>
+          <label>Delay <input data-delay type="number" min="3000" step="1000" value="8000"> ms</label>
+          <label>Max <input data-max type="number" min="1" step="1" value="100"></label>
+        </div>
+        <div>
+          <button type="button" data-scan>Scan Institutions</button>
+          <button type="button" data-start>Refresh All</button>
+          <button type="button" data-stop class="danger">Stop</button>
+          <button type="button" data-debug class="secondary">Debug Scan</button>
+          <button type="button" data-clear class="secondary">Clear Log</button>
+        </div>
+        <div class="status" data-status></div>
+        <div class="logs" data-logs></div>
+      </main>
+    `;
+
+    document.body.appendChild(el);
+    el.addEventListener("click", (event) => event.stopPropagation());
+    el.querySelector("[data-scan]").addEventListener("click", (event) => {
+      event.preventDefault();
+      scanInstitutions();
+    });
+    el.querySelector("[data-start]").addEventListener("click", (event) => {
+      event.preventDefault();
+      startRun();
+    });
+    el.querySelector("[data-stop]").addEventListener("click", (event) => {
+      event.preventDefault();
+      stopRun();
+    });
+    el.querySelector("[data-debug]").addEventListener("click", (event) => {
+      event.preventDefault();
+      debugScan();
+    });
+    el.querySelector("[data-clear]").addEventListener("click", clearLogs);
+    el.querySelector("[data-hide]").addEventListener("click", () => {
+      el.style.display = "none";
+      const tab = document.createElement("button");
+      tab.textContent = "Full View";
+      tab.style.cssText = "position:fixed;right:18px;top:92px;z-index:2147483647;padding:8px 10px;border-radius:6px;border:1px solid #2e7d32;background:#2e7d32;color:#fff;cursor:pointer";
+      tab.addEventListener("click", () => {
+        tab.remove();
+        el.style.display = "block";
+      });
+      document.body.appendChild(tab);
+    });
+
+    return el;
+  }
+
+  function render() {
+    if (!panel) return;
+    const state = getState();
+    const queue = getQueue();
+    const logs = getLogs();
+    const index = Number(state.index || 0);
+
+    panel.querySelector("[data-status]").innerHTML = `
+      <div><b>Status:</b> ${state.active ? "running" : (state.phase || "idle")}</div>
+      <div><b>Page:</b> ${pageLabel()}</div>
+      <div><b>Queue:</b> ${queue.length ? `${Math.min(index + 1, queue.length)}/${queue.length}` : "not scanned"}</div>
+      <div><b>Current:</b> ${state.currentName || "-"}</div>
+    `;
+
+    const logBox = panel.querySelector("[data-logs]");
+    const nextLogText = logs.join("\n");
+    if (logBox.textContent !== nextLogText) {
+      logBox.textContent = nextLogText;
+      logBox.scrollTop = logBox.scrollHeight;
+    }
+  }
+
+  function boot() {
+    if (document.getElementById("fidelity-full-view-refresher")) return;
+    panel = makePanel();
+    render();
+    setInterval(() => scheduleRender(false), 5000);
+
+    const state = getState();
+    if (state.active) {
+      pushLog("Resuming saved run after navigation.");
+      setTimeout(() => processQueue().catch((error) => {
+        pushLog(`Error: ${error.message}`);
+        setState({ ...getState(), active: false, phase: "error" });
+      }), 2500);
+    }
+  }
+
+  boot();
+})();
