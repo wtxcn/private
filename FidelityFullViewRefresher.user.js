@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.0
+// @version      0.2.1
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -80,16 +80,25 @@
     return !node.disabled && node.getAttribute("aria-disabled") !== "true";
   }
 
+  function isOwnPanel(node) {
+    return Boolean(node?.closest?.("#fidelity-full-view-refresher"));
+  }
+
   function getSearchRoots() {
     const roots = [document];
     const seen = new Set(roots);
 
-    Array.from(document.querySelectorAll("*")).forEach((node) => {
-      if (node.shadowRoot && !seen.has(node.shadowRoot)) {
-        seen.add(node.shadowRoot);
-        roots.push(node.shadowRoot);
-      }
-    });
+    function collectShadowRoots(root) {
+      Array.from(root.querySelectorAll("*")).forEach((node) => {
+        if (node.shadowRoot && !seen.has(node.shadowRoot)) {
+          seen.add(node.shadowRoot);
+          roots.push(node.shadowRoot);
+          collectShadowRoots(node.shadowRoot);
+        }
+      });
+    }
+
+    collectShadowRoots(document);
 
     Array.from(document.querySelectorAll("iframe")).forEach((frame) => {
       try {
@@ -97,6 +106,7 @@
         if (doc && !seen.has(doc)) {
           seen.add(doc);
           roots.push(doc);
+          collectShadowRoots(doc);
         }
       } catch (_) {
         // Cross-origin frames cannot be inspected from a userscript.
@@ -125,8 +135,11 @@
   }
 
   function isEditInstitutionPage() {
-    const body = textOf(document.body).slice(0, 2000);
-    return /Edit institution/i.test(body) && /Refresh information/i.test(body);
+    const refresh = getRefreshInformationButton();
+    if (!refresh) return false;
+    const detailRoot = getDetailRoot(refresh);
+    const detailText = textOf(detailRoot || document.body);
+    return /Edit institution/i.test(detailText) || /Find accounts|Delete institution|Back/i.test(detailText);
   }
 
   function getClickableLabel(node) {
@@ -142,8 +155,48 @@
   function findByText(pattern) {
     const selector = "button, a, [role='button'], [tabindex], input[type='button'], input[type='submit']";
     return getAllCandidates(selector)
-      .filter((node) => isVisible(node) && isEnabled(node))
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
       .find((node) => pattern.test(getClickableLabel(node)));
+  }
+
+  function findActionByText(pattern, preferredSelector = "") {
+    if (preferredSelector) {
+      const preferred = getAllCandidates(preferredSelector)
+        .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+        .find((node) => pattern.test(getClickableLabel(node)));
+      if (preferred) return closestClickable(preferred);
+    }
+
+    const selectors = [
+      "button",
+      "a",
+      "[role='button']",
+      "[tabindex]",
+      "input[type='button']",
+      "input[type='submit']",
+      "pvd3-button"
+    ].filter(Boolean).join(",");
+
+    const semantic = getAllCandidates(selectors)
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .find((node) => pattern.test(getClickableLabel(node)));
+    if (semantic) return closestClickable(semantic);
+
+    const textNode = getAllCandidates("button,a,[role='button'],[tabindex],pvd3-button,div,span,s-slot,s-assigned-wrapper")
+      .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
+      .find((node) => pattern.test(textOf(node)));
+    return textNode ? closestClickable(textNode) : null;
+  }
+
+  function getRefreshInformationButton() {
+    return findActionByText(/^Refresh information$/i, "[id='refresh-connection-btn']")
+      || findActionByText(/Refresh information/i, "[id='refresh-connection-btn']");
+  }
+
+  function getDetailRoot(node) {
+    return closestAcrossRoots(node, ".focus-layer-content, .connection-detail, aggregation-fullview-link-content, aggregation-connection-detail")
+      || closestAcrossRoots(node, ".connection-actions")
+      || node?.parentElement;
   }
 
   function closestClickable(node) {
@@ -153,9 +206,19 @@
       const role = current.getAttribute?.("role") || "";
       const tabindex = current.getAttribute?.("tabindex");
       if (tag === "button" || tag === "a" || role === "button" || tabindex === "0") return current;
-      current = current.parentElement;
+      current = current.parentElement || current.getRootNode?.().host;
     }
     return node;
+  }
+
+  function closestAcrossRoots(node, selector) {
+    let current = node;
+    for (let i = 0; i < 10 && current; i += 1) {
+      const match = current.closest?.(selector);
+      if (match) return match;
+      current = current.getRootNode?.().host || current.parentElement;
+    }
+    return null;
   }
 
   function isInstitutionGrid(node) {
@@ -261,22 +324,25 @@
 
   function getCurrentInstitutionName() {
     if (!isEditInstitutionPage()) return "";
-    const heading = Array.from(document.querySelectorAll("h1,h2,[role='heading']")).find((node) => /Edit institution/i.test(textOf(node)));
-    const body = textOf(document.body);
+    const refresh = getRefreshInformationButton();
+    const root = getDetailRoot(refresh);
+    const heading = Array.from((root || document).querySelectorAll?.("h1,h2,[role='heading']") || [])
+      .find((node) => /Edit institution/i.test(textOf(node)));
+    const body = textOf(root || document.body);
     const withoutHeading = body.replace(/.*Edit institution\s*/i, "");
     const firstLine = withoutHeading.split(/Updated\s+|Refresh information|Find accounts|Delete institution|Back/i)[0] || "";
     return firstLine.replace(/\s+/g, " ").trim().slice(0, 120) || textOf(heading);
   }
 
   function clickBack() {
-    const button = findByText(/^Back$/i);
+    const button = findActionByText(/^Back$/i);
     if (!button) return false;
     button.click();
     return true;
   }
 
   function clickRefreshInformation() {
-    const button = findByText(/Refresh information/i);
+    const button = getRefreshInformationButton();
     if (!button) return false;
     button.click();
     return true;
@@ -413,7 +479,7 @@
 
   function debugScan() {
     pushLog(`Debug: page="${pageLabel()}", editAccounts=${isEditAccountsPage()}, editInstitution=${isEditInstitutionPage()}`);
-    pushLog(`Debug: found ${getInstitutionCards().length} institution candidate(s), refreshButton=${Boolean(findByText(/Refresh information/i))}, backButton=${Boolean(findByText(/^Back$/i))}`);
+    pushLog(`Debug: found ${getInstitutionCards().length} institution candidate(s), refreshButton=${Boolean(getRefreshInformationButton())}, backButton=${Boolean(findActionByText(/^Back$/i))}`);
   }
 
   function scheduleRender(force = false) {
