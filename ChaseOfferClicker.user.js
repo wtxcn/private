@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Native Offer Clicker - Refresh Safe
 // @namespace    https://www.chase.com/
-// @version      0.2.1
+// @version      0.2.2
 // @description  Adds Chase Offers by clicking native Chase offer tiles slowly, with all-card queue support.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -14,7 +14,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.2.1";
+  const VERSION = "0.2.2";
   const STORE_KEY = "chaseOfferClickerState.v1";
   const LOG_KEY = "chaseOfferClickerLogs.v1";
   const KEEP_ALIVE_KEY = "chaseOfferClickerKeepAlive.v1";
@@ -212,6 +212,19 @@
       pushLog("No accountId candidates found. Open Chase account overview or an Offers page, then scan again.");
     }
     return ids;
+  }
+
+  function startScanCards() {
+    abortRequested = false;
+    if (!isOverviewPage()) {
+      setState({ ...getState(), active: true, phase: "scan-cards-only", startedAt: Date.now() });
+      pushLog("Opening overview to scan all card account IDs.");
+      location.assign("https://secure.chase.com/web/auth/dashboard#/dashboard/overview");
+      return;
+    }
+
+    const ids = scanAccounts();
+    setState({ ...getState(), active: false, phase: ids.length > 0 ? "scan-complete" : "scan-no-accounts" });
   }
 
   function isOfferTile(node) {
@@ -548,6 +561,13 @@
     const state = getState();
     if (!state.active) return;
 
+    if (state.phase === "scan-cards-only") {
+      await sleep(2500);
+      const ids = scanAccounts();
+      setState({ ...state, active: false, phase: ids.length > 0 ? "scan-complete" : "scan-no-accounts" });
+      return;
+    }
+
     if (state.phase === "scan-accounts") {
       await sleep(2000);
       let accountIds = scanAccounts();
@@ -760,7 +780,7 @@
     el.querySelector("[data-scan]").addEventListener("click", (event) => {
       event.preventDefault();
       event.stopPropagation();
-      scanAccounts();
+      startScanCards();
     });
     el.querySelector("[data-start-all]").addEventListener("click", (event) => {
       event.preventDefault();
