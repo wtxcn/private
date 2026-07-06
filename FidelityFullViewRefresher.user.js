@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.2.3
+// @version      0.2.5
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -163,10 +163,12 @@
   }
 
   function findActionByText(pattern, preferredSelector = "") {
+    const matchesActionText = (node) => pattern.test(textOf(node)) || pattern.test(getClickableLabel(node));
+
     if (preferredSelector) {
       const preferred = getAllCandidates(preferredSelector)
         .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
-        .find((node) => pattern.test(getClickableLabel(node)));
+        .find(matchesActionText);
       if (preferred) return closestClickable(preferred);
     }
 
@@ -182,7 +184,7 @@
 
     const semantic = getAllCandidates(selectors)
       .filter((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node))
-      .find((node) => pattern.test(getClickableLabel(node)));
+      .find(matchesActionText);
     if (semantic) return closestClickable(semantic);
 
     const textNode = getAllCandidates("button,a,[role='button'],[tabindex],pvd3-button,div,span,s-slot,s-assigned-wrapper")
@@ -197,7 +199,8 @@
   }
 
   function getBackButton() {
-    return findActionByText(/^Back$/i);
+    return findActionByText(/^Back$/i, "[id='fvlBackButton']")
+      || findActionByText(/^Back$/i);
   }
 
   function getDetailRoot(node) {
