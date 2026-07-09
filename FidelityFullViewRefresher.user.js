@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.3.2
+// @version      0.3.3
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -14,7 +14,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.3.2";
+  const VERSION = "0.3.3";
   const STORE_KEY = "fidelityFullViewRefresherState.v1";
   const LOG_KEY = "fidelityFullViewRefresherLogs.v1";
   const QUEUE_KEY = "fidelityFullViewRefresherQueue.v1";
@@ -573,7 +573,7 @@
     setTimeout(() => processQueue().catch((error) => {
       pushLog(`Error: ${error.message}`);
       setState({ ...getState(), active: false, phase: "error" });
-    }), 600);
+    }), 1600);
   }
 
   function startRun() {
