@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Fidelity Full View Refresher
 // @namespace    https://digital.fidelity.com/
-// @version      0.3.4
+// @version      0.3.5
 // @description  Refreshes linked institutions in Fidelity Full View by clicking the native Refresh information control slowly.
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth/*
 // @match        https://digital.fidelity.com/ftgw/pna/customer/pgc/networth*
@@ -14,7 +14,8 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.3.4";
+  const VERSION = "0.3.5";
+  const RECENT_REFRESH_SKIP_MINUTES = 60;
   const STORE_KEY = "fidelityFullViewRefresherState.v1";
   const LOG_KEY = "fidelityFullViewRefresherLogs.v1";
   const QUEUE_KEY = "fidelityFullViewRefresherQueue.v1";
@@ -430,6 +431,36 @@
     return firstLine.replace(/\s+/g, " ").trim().slice(0, 120) || textOf(heading);
   }
 
+  function getCurrentUpdatedAge() {
+    if (!isEditInstitutionPage()) return null;
+    const refresh = getRefreshInformationButtonAnyState();
+    const root = getDetailRoot(refresh);
+    const text = textOf(root || document.body);
+    const match = text.match(/\bUpdated\s+(just now|moments? ago|less than (?:a|an|1) (?:min(?:ute)?s?|hours?) ago|(?:a|an|\d+)\s*(?:seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)\s+ago|yesterday)\b/i);
+    if (!match) return null;
+
+    const label = match[1].replace(/\s+/g, " ");
+    const lower = label.toLowerCase();
+    if (/just now|moment|less than/.test(lower)) return { label, minutes: 0 };
+    if (/yesterday/.test(lower)) return { label, minutes: 24 * 60 };
+
+    const amountMatch = lower.match(/^(a|an|\d+)\s*(seconds?|secs?|minutes?|mins?|hours?|hrs?|days?)/);
+    if (!amountMatch) return null;
+
+    const value = /^(a|an)$/.test(amountMatch[1]) ? 1 : Number(amountMatch[1]);
+    const unit = amountMatch[2];
+    if (/^(second|sec)/.test(unit)) return { label, minutes: 0 };
+    if (/^(minute|min)/.test(unit)) return { label, minutes: value };
+    if (/^(hour|hr)/.test(unit)) return { label, minutes: value * 60 };
+    if (/^day/.test(unit)) return { label, minutes: value * 24 * 60 };
+    return null;
+  }
+
+  function shouldSkipRecentlyUpdated() {
+    const age = getCurrentUpdatedAge();
+    return age && age.minutes < RECENT_REFRESH_SKIP_MINUTES ? age : null;
+  }
+
   function clickBack() {
     const button = getBackButton();
     return humanClick(button) ? describeNode(button) : "";
@@ -554,13 +585,19 @@
     if (isEditInstitutionPage()) {
       const name = getCurrentInstitutionName() || state.currentName || "institution";
       if (state.phase !== "refreshing" && state.phase !== "returning-list") {
-        const ok = clickRefreshInformation();
-        if (ok) {
-          pushLog(`Clicked Refresh information: ${name} via ${ok}`);
-          setState({ ...state, phase: "refreshing", currentName: name });
-          await waitForRefreshToFinish(name, state.delayMs || 30000);
+        const recentAge = shouldSkipRecentlyUpdated();
+        if (recentAge) {
+          pushLog(`Skipped recently updated: ${name} (Updated ${recentAge.label}).`);
+          setState({ ...state, phase: "returning-list", currentName: name });
         } else {
-          pushLog(`Could not find Refresh information on ${name}.`);
+          const ok = clickRefreshInformation();
+          if (ok) {
+            pushLog(`Clicked Refresh information: ${name} via ${ok}`);
+            setState({ ...state, phase: "refreshing", currentName: name });
+            await waitForRefreshToFinish(name, state.delayMs || 30000);
+          } else {
+            pushLog(`Could not find Refresh information on ${name}.`);
+          }
         }
       }
 
