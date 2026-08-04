@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         US Bank Cash-Back Deal Clicker
 // @namespace    https://onlinebanking.usbank.com/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Activates U.S. Bank cash-back deals by opening each visible native deal card slowly and clicking Activate Offer.
 // @match        https://onlinebanking.usbank.com/digital/*
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/USBankOfferClicker.user.js
@@ -13,7 +13,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.0";
+  const VERSION = "0.1.1";
   const DEALS_URL = "https://onlinebanking.usbank.com/digital/servicing/dominjection/cashback-deals";
   const STORE_KEY = "usBankOfferClickerState.v1";
   const LOG_KEY = "usBankOfferClickerLogs.v1";
@@ -144,7 +144,10 @@
 
   function isLoggedOutOrTimedOut() {
     const body = textOf(document.body).slice(0, 2500);
-    return /log in|login|logged out|session (has )?timed out|for your security|verify your identity/i.test(body)
+    if (isDealsPage() && getOfferButtons().length > 0) return false;
+
+    const normalized = body.replace(/Log in to your business profile[^.]*\./gi, "");
+    return /sign in|sign on|logged out|session (has )?timed out|for your security|verify your identity/i.test(normalized)
       && /u\.?s\.? bank|usbank|online banking/i.test(`${body} ${location.hostname}`);
   }
 
