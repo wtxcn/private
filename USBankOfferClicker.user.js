@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         US Bank Cash-Back Deal Clicker
 // @namespace    https://onlinebanking.usbank.com/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Activates U.S. Bank cash-back deals by opening each visible native deal card slowly and clicking Activate Offer.
 // @match        https://onlinebanking.usbank.com/digital/*
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/USBankOfferClicker.user.js
@@ -13,7 +13,7 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.1.2";
+  const VERSION = "0.1.3";
   const DEALS_URL = "https://onlinebanking.usbank.com/digital/servicing/dominjection/cashback-deals";
   const STORE_KEY = "usBankOfferClickerState.v1";
   const LOG_KEY = "usBankOfferClickerLogs.v1";
@@ -218,16 +218,40 @@
     });
   }
 
-  function findCloseButton() {
-    const byId = allCandidates("#vicinity-overlay-click-modal--close, [data-testid='vicinity-overlay-click-modal--close']").find((node) => {
-      return !isOwnPanel(node) && isVisible(node) && isEnabled(node);
-    });
-    if (byId) return byId;
+  function visibleModal() {
+    return allCandidates("#vicinity-overlay-click-modal, .usb-modal-v2, .usb-modal-v2--dialog, .cashback-offer-detail")
+      .find((node) => !isOwnPanel(node) && isVisible(node));
+  }
 
-    return allCandidates("button, [role='button']").find((node) => {
+  function findCloseButton() {
+    const direct = allCandidates([
+      "#vicinity-overlay-click-modal--close",
+      "[data-testid='vicinity-overlay-click-modal--close']",
+      ".usb-modal-v2--close button",
+      "button.modal_close_icon"
+    ].join(", ")).find((node) => !isOwnPanel(node) && isVisible(node) && isEnabled(node));
+    if (direct) return direct;
+
+    const labeled = allCandidates("button, [role='button']").find((node) => {
       if (isOwnPanel(node) || !isVisible(node) || !isEnabled(node)) return false;
       const label = getLabel(node);
-      return Boolean(node.closest?.("#vicinity-overlay-click-modal, .usb-modal-v2")) && /close modal/i.test(label);
+      const className = String(node.className || "");
+      return Boolean(node.closest?.("#vicinity-overlay-click-modal, .usb-modal-v2, .usb-modal-v2--dialog"))
+        && (/close modal/i.test(label) || /modal_close_icon|usb-modal-v2--close/i.test(className));
+    });
+    if (labeled) return labeled;
+
+    const modal = visibleModal();
+    if (!modal) return null;
+
+    const modalRect = modal.getBoundingClientRect();
+    return allCandidates("button, [role='button']").find((node) => {
+      if (isOwnPanel(node) || !isVisible(node) || !isEnabled(node)) return false;
+      const rect = node.getBoundingClientRect();
+      const isSmall = rect.width <= 64 && rect.height <= 64;
+      const nearTop = rect.top <= modalRect.top + 90;
+      const nearRight = rect.right >= modalRect.right - 90;
+      return Boolean(node.closest?.("#vicinity-overlay-click-modal, .usb-modal-v2, .usb-modal-v2--dialog")) && isSmall && nearTop && nearRight;
     });
   }
 
@@ -292,12 +316,12 @@
   }
 
   async function closeDetailIfOpen() {
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 8; i += 1) {
       const close = findCloseButton();
       if (!close) return true;
       humanClick(close);
       await waitUntil(() => !findCloseButton() || findCloseButton() !== close, 5000, 250);
-      await sleep(300);
+      await sleep(500);
     }
     return !findCloseButton();
   }
