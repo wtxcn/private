@@ -6,6 +6,8 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 
 - `AmexNativeOfferClicker.user.js`: Amex Offers helper.
 - `ChaseOfferClicker.user.js`: Chase Offers helper for the currently loaded Chase Offers page.
+- `CitiOfferClicker.user.js`: Citi Merchant Offers helper.
+- `USBankOfferClicker.user.js`: U.S. Bank cash-back deals helper.
 - `FidelityFullViewRefresher.user.js`: Fidelity Full View helper for refreshing linked institutions.
 
 ## Why this script exists
@@ -82,3 +84,19 @@ The Fidelity script is intentionally UI-only:
 - It ignores individual account rows and only opens institution cards.
 - It opens each institution, clicks the native `Refresh information` control, waits, then clicks `Back`.
 - If Fidelity asks for credentials, MFA, or manual repair, the script stops so you can handle it.
+
+## U.S. Bank Usage
+
+1. Install `USBankOfferClicker.user.js` in Tampermonkey.
+2. Open U.S. Bank online banking. The script can open the cash-back deals page when you click `Activate All`.
+3. Use the floating `US Bank Deals` panel.
+4. Click `Debug Scan` to preview visible deal cards.
+5. Click `Activate All` to open each deal, click the native `Activate Offer` button, close the detail panel, and continue.
+
+The U.S. Bank script is intentionally UI-only:
+
+- It does not call U.S. Bank or Cardlytics APIs directly.
+- It only clicks visible deal cards and native `Activate Offer` controls.
+- It skips deals it has already checked during the current run.
+- It scrolls slowly to load more deals.
+- Keep-alive is enabled by default for long runs.
