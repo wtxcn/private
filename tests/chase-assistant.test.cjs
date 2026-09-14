@@ -2,6 +2,7 @@ const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
+const { JSDOM } = require('jsdom');
 
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../ChaseOffersAssistant.user.js'), 'utf8');
@@ -21,6 +22,19 @@ function load(snapshot) {
   context.__CHASE_ASSISTANT_TEST__ = {};
   vm.runInContext(source, context);
   return context.__CHASE_ASSISTANT_TEST__.api;
+}
+
+function loadPanel(snapshot) {
+  const dom = new JSDOM('', { url: 'https://secure.chase.com/web/auth/dashboard#/dashboard/overview', runScripts: 'outside-only', pretendToBeVisual: true });
+  const w = dom.window;
+  w.HTMLElement.prototype.getBoundingClientRect = function () { return { left: 20, top: 30, width: 100, height: 60 }; };
+  w.HTMLElement.prototype.scrollIntoView = function () {};
+  if (snapshot) w.localStorage.setItem('chaseOffersAssistantSnapshot.v1', JSON.stringify(snapshot));
+  w.__CHASE_ASSISTANT_TEST__ = {};
+  w.eval(source);
+  const api = w.__CHASE_ASSISTANT_TEST__.api;
+  const panel = api.mount();
+  return { dom, w, api, panel };
 }
 
 test('normalizes Chase tile labels without merchant drift', () => {
@@ -85,7 +99,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.13/);
+  assert.match(source, /@version\s+0\.1\.14/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
@@ -93,6 +107,30 @@ test('the assistant panel uses the refreshed logo, system font, and offer-state 
   assert.match(source, /offer-name \{ color:#071f52; font-size:17px; font-weight:800/);
   assert.match(source, /card\.added \{ color:#28784f; border-color:#76c59a; background:#eaf7ef/);
   assert.match(source, /text-decoration:none/);
+});
+
+test('Chase panel minimizes to a movable launcher and stays minimized across renders', () => {
+  const snapshot = { cards: [{ id: 'a', name: 'Card A' }], offers: [
+    { key: 'offer', name: 'Merchant', cards: { a: 'addable' } }
+  ], selected: {}, scannedAt: 0, logs: [] };
+  const { dom, w, api, panel } = loadPanel(snapshot);
+  panel.querySelector('[data-minimize]').click();
+  assert.equal(api.minimized(), true);
+  api.toggleOfferSelection('offer');
+  api.render();
+  assert.equal(panel.classList.contains('minimized'), true);
+  const launcher = panel.querySelector('[data-restore]');
+  launcher.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, button: 0, clientX: 40, clientY: 50 }));
+  panel.dispatchEvent(new w.MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 150 }));
+  panel.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true, clientX: 180, clientY: 150 }));
+  assert.equal(panel.style.left, '160px');
+  assert.equal(panel.style.top, '130px');
+  panel.querySelector('[data-restore]').click();
+  assert.equal(api.minimized(), true);
+  panel.querySelector('[data-restore]').click();
+  assert.equal(api.minimized(), false);
+  assert.equal(api.selectedTasks().length, 1);
+  dom.window.close();
 });
 
 test('Add selected starts the guarded queue without an extra confirmation dialog', () => {

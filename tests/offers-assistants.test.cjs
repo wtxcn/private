@@ -11,7 +11,7 @@ function setup(bank = 'citi', html = '', seed) {
   const url = bank === 'citi' ? 'https://online.citi.com/US/nga/products-offers/merchantoffers' : 'https://onlinebanking.usbank.com/digital/servicing/dominjection/cashback-deals';
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
-  w.HTMLElement.prototype.getBoundingClientRect = function () { return { width: this.hidden ? 0 : 100, height: this.hidden ? 0 : 60 }; };
+  w.HTMLElement.prototype.getBoundingClientRect = function () { return { left: 20, top: 30, width: this.hidden ? 0 : 100, height: this.hidden ? 0 : 60 }; };
   w.HTMLElement.prototype.scrollIntoView = function () {};
   // Advance logical time between awaits without spending minutes on enrollment delays.
   let elapsed = Date.now();
@@ -103,6 +103,28 @@ for (const bank of ['citi', 'usbank']) {
     assert.equal(root.activeElement, input);
     assert.equal(root.querySelector('[data-add]').textContent, 'Add selected (2)');
     assert.equal(root.querySelector('[data-offer="ready"] .offer-main strong').textContent, 'Merchant Beta');
+    dom.window.close();
+  });
+  test(`${bank}: panel minimizes to a movable launcher and restores without losing selection`, () => {
+    const { dom, w } = setup(bank, '', seed());
+    delete w.__OFFERS_ASSISTANT_TEST__;
+    w.eval(`createOffersAssistant(${JSON.stringify(config(bank))}, ${bank === 'citi' ? 'createCitiAdapter' : 'createUSBankAdapter'});`);
+    const panel = w.document.querySelector(`#${bank}-offers-assistant`);
+    const root = panel.shadowRoot;
+    root.querySelector('[data-minimize]').click();
+    assert.equal(panel.classList.contains('minimized'), true);
+    const launcher = root.querySelector('[data-restore]');
+    launcher.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, composed: true, button: 0, clientX: 40, clientY: 50 }));
+    panel.dispatchEvent(new w.MouseEvent('pointermove', { bubbles: true, clientX: 180, clientY: 150 }));
+    panel.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true, clientX: 180, clientY: 150 }));
+    assert.equal(panel.style.left, '160px');
+    assert.equal(panel.style.top, '130px');
+    root.querySelector('[data-offer="ready"] [data-offer-toggle]').click();
+    root.querySelector('[data-restore]').click();
+    assert.equal(panel.classList.contains('minimized'), true);
+    root.querySelector('[data-restore]').click();
+    assert.equal(panel.classList.contains('minimized'), false);
+    assert.equal(root.querySelectorAll('[data-offer="ready"] .chosen').length, 2);
     dom.window.close();
   });
 }
@@ -198,6 +220,9 @@ test('packaged scripts have independent identities, no remote library, no confir
     assert.doesNotMatch(code, /window\.confirm|@require|GM_xmlhttpRequest|fetch\(|XMLHttpRequest|state\.active/);
     assert.match(code, /font-size:17px;font-weight:800/);
     assert.match(code, /\.card\.added\{color:#28784f/);
+    assert.match(code, /data-minimize/);
+    assert.match(code, /data-restore/);
+    assert.match(code, /pointermove/);
   }
 });
 

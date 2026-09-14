@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.13
+// @version      0.1.14
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -29,6 +29,9 @@
   let viewFilter = "all";
   let cardFilter = "";
   let cardSummaryMode = false;
+  let minimized = false;
+  let dragState = null;
+  let suppressLauncherClick = false;
   let snapshot = loadSnapshot();
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -448,9 +451,60 @@
     return snapshot.offers.reduce((total, offer) => total + (offer.cards[cardId] ? 1 : 0), 0);
   }
 
+  function setMinimized(value) {
+    minimized = Boolean(value);
+    panel?.classList.toggle("minimized", minimized);
+  }
+
+  function movePanel(clientX, clientY) {
+    const width = panel.offsetWidth || panel.getBoundingClientRect().width;
+    const height = panel.offsetHeight || panel.getBoundingClientRect().height;
+    const left = Math.max(8, Math.min(clientX - dragState.offsetX, window.innerWidth - width - 8));
+    const top = Math.max(8, Math.min(clientY - dragState.offsetY, window.innerHeight - height - 8));
+    panel.style.left = `${left}px`;
+    panel.style.top = `${top}px`;
+    panel.style.right = "auto";
+  }
+
+  function startPanelDrag(event) {
+    if (event.button !== undefined && event.button !== 0) return;
+    const origin = event.composedPath?.()[0] || event.target;
+    if (!origin?.closest?.("[data-drag-handle], [data-restore]")) return;
+    if (origin.closest("button") && !origin.closest("[data-restore]")) return;
+    const rect = panel.getBoundingClientRect();
+    dragState = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, moved: false, launcher: Boolean(origin.closest("[data-restore]")) };
+    panel.setPointerCapture?.(event.pointerId);
+  }
+
+  function continuePanelDrag(event) {
+    if (!dragState || (dragState.pointerId !== undefined && event.pointerId !== undefined && event.pointerId !== dragState.pointerId)) return;
+    if (Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) > 4) dragState.moved = true;
+    if (!dragState.moved) return;
+    event.preventDefault();
+    movePanel(event.clientX, event.clientY);
+  }
+
+  function finishPanelDrag(event) {
+    if (!dragState || (dragState.pointerId !== undefined && event.pointerId !== undefined && event.pointerId !== dragState.pointerId)) return;
+    suppressLauncherClick = dragState.moved && dragState.launcher;
+    panel.releasePointerCapture?.(event.pointerId);
+    dragState = null;
+  }
+
   function makePanel() {
     const element = document.createElement("aside");
     element.id = ID;
+    element.addEventListener("pointerdown", startPanelDrag);
+    element.addEventListener("pointermove", continuePanelDrag);
+    element.addEventListener("pointerup", finishPanelDrag);
+    element.addEventListener("pointercancel", finishPanelDrag);
+    element.addEventListener("click", (event) => {
+      if (event.target.closest("[data-minimize]")) setMinimized(true);
+      else if (event.target.closest("[data-restore]")) {
+        if (suppressLauncherClick) suppressLauncherClick = false;
+        else setMinimized(false);
+      }
+    });
     document.body.appendChild(element);
     return element;
   }
@@ -495,9 +549,15 @@
       }).join("") || "<div class=\"empty\">No offers match this view.</div>";
     panel.innerHTML = `
       <style>
-        #${ID} { position:fixed; z-index:2147483647; top:82px; right:16px; width:min(660px,calc(100vw - 32px)); max-height:calc(100vh - 98px); display:flex; flex-direction:column; overflow:hidden; color:#17254a; background:#f8f9fb; border:1px solid #e4e7ee; border-radius:16px; box-shadow:0 18px 42px rgba(18,39,79,.17); font:14px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; letter-spacing:0; }
+        #${ID} { position:fixed; z-index:2147483647; top:82px; right:16px; width:min(660px,calc(100vw - 32px)); color:#17254a; font:14px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; letter-spacing:0; }
+        #${ID}.minimized { width:auto; }
         #${ID} * { box-sizing:border-box; }
-        #${ID} header { display:flex; align-items:center; justify-content:space-between; padding:16px 18px; color:#071f52; background:#fff; border-bottom:1px solid #e7e9ee; }
+        #${ID} .panel-shell { display:flex; flex-direction:column; max-height:calc(100vh - 98px); overflow:hidden; background:#f8f9fb; border:1px solid #e4e7ee; border-radius:16px; box-shadow:0 18px 42px rgba(18,39,79,.17); }
+        #${ID}.minimized .panel-shell { display:none; }
+        #${ID} .launcher { display:none; align-items:center; margin:0; padding:9px 12px; border-color:#0874cf; border-radius:7px; color:#fff; background:#0874cf; box-shadow:0 8px 24px rgba(18,39,79,.2); touch-action:none; }
+        #${ID}.minimized .launcher { display:flex; }
+        #${ID} header { display:flex; align-items:center; justify-content:space-between; padding:16px 18px; color:#071f52; background:#fff; border-bottom:1px solid #e7e9ee; cursor:grab; touch-action:none; }
+        #${ID} header:active, #${ID} .launcher:active { cursor:grabbing; }
         #${ID} .brand-wrap { display:flex; align-items:center; gap:11px; min-width:0; }
         #${ID} .brand-mark { position:relative; display:grid; width:48px; height:48px; place-items:center; flex:none; overflow:hidden; border-radius:12px; background:#0874cf; box-shadow:inset 0 -7px 11px rgba(0,54,128,.16); }
         #${ID} .brand-card { position:relative; display:block; width:27px; height:19px; border-radius:3px; background:#fff; box-shadow:0 1px 2px rgba(0,49,112,.18); }
@@ -506,6 +566,8 @@
         #${ID} .brand { color:#071f52; font-size:18px; font-weight:800; line-height:1.12; }
         #${ID} .subbrand { margin-top:3px; color:#798293; font-size:12px; font-weight:500; }
         #${ID} .run-state { color:#687387; font-size:12px; font-weight:700; }
+        #${ID} .header-actions { display:flex; align-items:center; gap:8px; }
+        #${ID} button.minimize { display:grid; width:32px; height:32px; margin:0; padding:0; place-items:center; border-color:#d9dee8; color:#0a2b63; background:#fff; font-size:20px; line-height:1; }
         #${ID} main { min-height:0; overflow:auto; }
         #${ID} .controls { position:sticky; top:0; z-index:2; padding:12px 16px 10px; background:#f8f9fb; border-bottom:1px solid #e7e9ee; }
         #${ID} button { border:1px solid #0a2b63; border-radius:7px; padding:7px 10px; color:#fff; background:#0a2b63; font:700 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; cursor:pointer; }
@@ -566,7 +628,9 @@
         #${ID} .logs { max-height:110px; overflow:auto; margin-bottom:10px; padding:8px; border-radius:5px; background:#102746; color:#d9eafb; white-space:pre-wrap; font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; }
         @media (max-width:560px) { #${ID} { right:8px; width:calc(100vw - 16px); } #${ID} .stats { grid-template-columns:repeat(2,minmax(0,1fr)); } #${ID} .actions button { flex:1 1 auto; } }
       </style>
-      <header><div class="brand-wrap"><div class="brand-mark" aria-hidden="true"><span class="brand-card"></span><span class="brand-plus">+</span></div><div><div class="brand">Chase Offers</div><div class="subbrand">Offers: ${snapshot.offers.length} · Cards: ${snapshot.cards.length}</div></div></div><span class="run-state">${mode}</span></header>
+      <button class="launcher" data-restore title="Restore Chase Offers" aria-label="Restore Chase Offers">Chase Offers</button>
+      <div class="panel-shell">
+      <header data-drag-handle><div class="brand-wrap"><div class="brand-mark" aria-hidden="true"><span class="brand-card"></span><span class="brand-plus">+</span></div><div><div class="brand">Chase Offers</div><div class="subbrand">Offers: ${snapshot.offers.length} · Cards: ${snapshot.cards.length}</div></div></div><div class="header-actions"><span class="run-state">${mode}</span><button class="minimize" data-minimize title="Minimize" aria-label="Minimize">&minus;</button></div></header>
       <main>
         <div class="controls">
           <div class="actions">
@@ -583,7 +647,9 @@
         </div>
         <section class="list">${listContent}</section>
         <details><summary>Scan log · ${date}</summary><div class="logs">${escapeHtml((snapshot.logs || []).join("\n"))}</div></details>
-      </main>`;
+      </main></div>`;
+
+    setMinimized(minimized);
 
     panel.querySelector("[data-scan]")?.addEventListener("click", scanAllCards);
     panel.querySelector("[data-select]")?.addEventListener("click", selectVisibleAddable);
@@ -626,7 +692,7 @@
   }
 
   if (globalThis.__CHASE_ASSISTANT_TEST__) {
-    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers };
+    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers, mount: () => { panel = makePanel(); render(); return panel; }, render, minimized: () => minimized };
     return;
   }
 
