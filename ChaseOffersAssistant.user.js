@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.3
+// @version      0.1.4
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -27,6 +27,7 @@
   let cancelRequested = false;
   let searchTerm = "";
   let viewFilter = "all";
+  let cardFilter = "";
   let snapshot = loadSnapshot();
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -383,6 +384,7 @@
     const query = searchTerm.trim().toLowerCase();
     return snapshot.offers.filter((offer) => {
       const statuses = Object.values(offer.cards);
+      if (cardFilter && !offer.cards[cardFilter]) return false;
       if (viewFilter === "addable" && !statuses.includes("addable")) return false;
       if (viewFilter === "added" && !statuses.includes("added")) return false;
       return !query || offer.name.toLowerCase().includes(query);
@@ -391,6 +393,15 @@
 
   function selectedCount() {
     return selectedTasks().length;
+  }
+
+  function countOfferPlacements(status) {
+    return snapshot.offers.reduce((total, offer) => total + Object.values(offer.cards)
+      .filter((value) => value === status).length, 0);
+  }
+
+  function countCardOffers(cardId) {
+    return snapshot.offers.reduce((total, offer) => total + (offer.cards[cardId] ? 1 : 0), 0);
   }
 
   function makePanel() {
@@ -407,6 +418,8 @@
     const date = snapshot.scannedAt ? new Date(snapshot.scannedAt).toLocaleString() : "Not scanned";
     const addableOffers = snapshot.offers.filter((offer) => Object.values(offer.cards).includes("addable")).length;
     const addedOffers = snapshot.offers.filter((offer) => Object.values(offer.cards).includes("added")).length;
+    const addablePlacements = countOfferPlacements("addable");
+    const addedPlacements = countOfferPlacements("added");
     const selected = selectedCount();
     panel.innerHTML = `
       <style>
@@ -428,7 +441,7 @@
         #${ID} .search { display:flex; align-items:center; margin-top:10px; padding:0 10px; background:#fff; border:1px solid #b9c9dc; border-radius:5px; box-shadow:0 1px 2px rgba(0,23,62,.04); }
         #${ID} .search span { color:#58708e; font-weight:700; }
         #${ID} input { width:100%; padding:9px 8px; border:0; outline:0; color:#142033; background:transparent; font:inherit; }
-        #${ID} .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; margin-top:10px; }
+        #${ID} .stats { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:7px; margin-top:10px; }
         #${ID} .stat { min-width:0; padding:8px 9px; background:#fff; border:1px solid #d5dfeb; border-radius:6px; box-shadow:0 1px 2px rgba(0,23,62,.03); }
         #${ID} .stat b { display:block; color:#102e55; font-size:16px; font-variant-numeric:tabular-nums; }
         #${ID} .stat span { display:block; margin-top:1px; color:#61738a; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
@@ -436,6 +449,10 @@
         #${ID} .filter { border:0; border-radius:0; padding:6px 9px; color:#52667e; background:transparent; font-weight:700; }
         #${ID} .filter + .filter { margin-left:0; }
         #${ID} .filter.active { color:#0b2f60; box-shadow:inset 0 -2px 0 #1478c9; }
+        #${ID} .card-scope { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin-top:8px; }
+        #${ID} .scope-label { margin-right:2px; color:#697b91; font-size:10px; font-weight:700; text-transform:uppercase; }
+        #${ID} .scope { margin:0; padding:4px 7px; border-color:#c5d2e0; color:#4a6079; background:#fff; font-size:10px; font-weight:700; }
+        #${ID} .scope.active { color:#fff; border-color:#0a5da9; background:#0a5da9; }
         #${ID} .list { display:flex; flex-direction:column; gap:7px; padding:10px 16px 14px; }
         #${ID} .offer { padding:10px 11px; background:#fff; border:1px solid #d7e0ec; border-radius:7px; box-shadow:0 1px 2px rgba(0,23,62,.04); }
         #${ID} .offer.selected-row { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset,0 1px 2px rgba(0,23,62,.04); }
@@ -443,7 +460,7 @@
         #${ID} .offer-main { flex:1; min-width:0; }
         #${ID} .offer-name { color:#142033; font-size:13px; font-weight:700; line-height:1.3; overflow-wrap:anywhere; }
         #${ID} .offer-meta { margin-top:2px; color:#71839a; font-size:11px; }
-        #${ID} .offer-count { min-width:48px; color:#0b2f60; font-size:12px; font-weight:700; text-align:right; font-variant-numeric:tabular-nums; }
+        #${ID} .offer-count { min-width:64px; color:#0b2f60; font-size:12px; font-weight:700; text-align:right; font-variant-numeric:tabular-nums; }
         #${ID} .offer-count span { display:block; color:#71839a; font-size:10px; font-weight:400; }
         #${ID} .cards { display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
         #${ID} .card { margin:0; padding:5px 7px; border-color:#b7c8db; background:#fff; color:#40536b; font-size:11px; font-weight:600; }
@@ -466,14 +483,16 @@
           <button class="danger" data-stop ${scanInProgress || addInProgress ? "" : "disabled"}>Stop</button>
           </div>
           <label class="search"><span>Search</span><input data-search placeholder="Search scanned offers" value="${escapeHtml(searchTerm)}"></label>
-          <div class="stats"><div class="stat"><b>${snapshot.cards.length}</b><span>Cards</span></div><div class="stat"><b>${snapshot.offers.length}</b><span>Offers</span></div><div class="stat"><b>${addableOffers}</b><span>Addable</span></div><div class="stat"><b>${selected}</b><span>Selected</span></div></div>
+          <div class="stats"><div class="stat"><b>${snapshot.cards.length}</b><span>Cards</span></div><div class="stat"><b>${snapshot.offers.length}</b><span>Unique offers</span></div><div class="stat"><b>${addablePlacements}</b><span>Addable cards</span></div><div class="stat"><b>${addedPlacements}</b><span>Added cards</span></div><div class="stat"><b>${selected}</b><span>Selected</span></div></div>
           <div class="filters"><button class="filter ${viewFilter === "all" ? "active" : ""}" data-filter="all">All ${snapshot.offers.length}</button><button class="filter ${viewFilter === "addable" ? "active" : ""}" data-filter="addable">Addable ${addableOffers}</button><button class="filter ${viewFilter === "added" ? "active" : ""}" data-filter="added">Added ${addedOffers}</button></div>
+          <div class="card-scope"><span class="scope-label">Card</span><button class="scope ${!cardFilter ? "active" : ""}" data-card-filter="">All cards</button>${snapshot.cards.map((card) => `<button class="scope ${cardFilter === card.id ? "active" : ""}" data-card-filter="${card.id}">${escapeHtml(card.name)} · ${countCardOffers(card.id)}</button>`).join("")}</div>
         </div>
-        <section class="list">${offers.slice(0, 400).map((offer) => {
+        <section class="list">${offers.map((offer) => {
           const addable = Object.values(offer.cards).filter((status) => status === "addable").length;
           const added = Object.values(offer.cards).filter((status) => status === "added").length;
+          const visibleOn = Object.keys(offer.cards).length;
           const selectedRow = (snapshot.selected[offer.key] || []).length > 0;
-          return `<article class="offer ${selectedRow ? "selected-row" : ""}"><div class="offer-head"><div class="offer-main"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="offer-meta">${added ? `${added} already added` : "Choose cards below"}</div></div><div class="offer-count">${addable}<span>available</span></div></div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
+          return `<article class="offer ${selectedRow ? "selected-row" : ""}"><div class="offer-head"><div class="offer-main"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="offer-meta">${visibleOn}/${snapshot.cards.length} cards · ${added ? `${added} added` : "Choose cards below"}</div></div><div class="offer-count">${addable}<span>addable</span></div></div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
             const status = offer.cards[card.id];
             const isSelected = (snapshot.selected[offer.key] || []).includes(card.id);
             const classes = `card ${status === "added" ? "added" : isSelected ? "selected" : ""}`;
@@ -490,6 +509,7 @@
     panel.querySelector("[data-stop]")?.addEventListener("click", stopCurrentRun);
     panel.querySelector("[data-search]")?.addEventListener("input", (event) => { searchTerm = event.target.value; render(); });
     panel.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => { viewFilter = button.dataset.filter; render(); }));
+    panel.querySelectorAll("[data-card-filter]").forEach((button) => button.addEventListener("click", () => { cardFilter = button.dataset.cardFilter; render(); }));
     panel.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
       toggleSelection(decodeURIComponent(button.dataset.toggle), button.dataset.card);
     }));

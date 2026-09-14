@@ -52,3 +52,9 @@ test('add queue is retained only while the user-started run has a resume permit'
   clearAddRun();
   assert.equal(loadAddRun(), null);
 });
+
+test('the summary view does not cap the aggregated offer list', () => {
+  assert.doesNotMatch(source, /offers\.slice\(0, 400\)/);
+  assert.match(source, /Unique offers/);
+  assert.match(source, /data-card-filter/);
+});
