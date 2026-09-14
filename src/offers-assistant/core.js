@@ -164,6 +164,8 @@ function createOffersAssistant(config, adapterFactory) {
     }
     for (const item of incoming) {
       const offer = offers.get(item.key) || { key: item.key, name: item.name, description: item.description || "", imageUrl: item.imageUrl || "", cards: {} };
+      offer.name = item.name;
+      offer.description = item.description || "";
       offer.cards[card.id] = ["added", "addable"].includes(item.status) ? item.status : "unknown";
       if (item.imageUrl) offer.imageUrl = item.imageUrl;
       offers.set(item.key, offer);
@@ -276,15 +278,16 @@ function createOffersAssistant(config, adapterFactory) {
     }).join("") : filtered().map(offer => {
       const eligible = Object.values(offer.cards).filter(s => s === "addable").length;
       const added = Object.values(offer.cards).filter(s => s === "added").length;
+      const unknown = Object.values(offer.cards).filter(s => s === "unknown").length;
       const total = Object.keys(offer.cards).length;
       const selected = snapshot.selected[offer.key] || [];
       const complete = fullyAdded(offer);
       const allSelected = eligible > 0 && Object.entries(offer.cards).filter(([, s]) => s === "addable").every(([id]) => selected.includes(id));
       const key = escape(offer.key);
       const logo = offer.imageUrl ? `<img src="${escape(offer.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="initials">${escape(offer.name.slice(0, 2).toUpperCase())}</span>`;
-      return `<article class="offer ${selected.length ? "selected" : ""}" data-offer="${key}"><button class="offer-head" data-offer-toggle aria-pressed="${allSelected}" aria-label="${escape(`${allSelected ? "Deselect" : "Select"} all eligible ${config.scopePlural} for ${offer.name}`)}" ${busy || !eligible ? "disabled" : ""}><span class="logo">${logo}</span><span class="offer-main"><strong>${escape(offer.name)}</strong><span class="description">${escape(offer.description || "")}</span><span class="${complete ? "green" : "meta"}">${added}/${total} ${escape(config.scopePlural)} added</span></span><span class="count ${complete ? "green" : ""}">${eligible || (complete ? added : "?")}<small>${eligible ? "eligible" : complete ? "added" : "unverified"}</small></span></button><div class="cards">${snapshot.cards.filter(card => offer.cards[card.id]).map(card => {
+      return `<article class="offer ${selected.length ? "selected" : ""}" data-offer="${key}"><button class="offer-head" data-offer-toggle aria-pressed="${allSelected}" aria-label="${escape(`${allSelected ? "Deselect" : "Select"} all eligible ${config.scopePlural} for ${offer.name}`)}" ${busy || !eligible ? "disabled" : ""}><span class="logo">${logo}</span><span class="offer-main"><strong>${escape(offer.name)}</strong><span class="description">${escape(offer.description || "")}</span><span class="${complete ? "green" : "meta"}">${added}/${total} ${escape(config.scopePlural)} added</span></span><span class="count ${complete ? "green" : ""}">${eligible || (complete ? added : unknown)}<small>${eligible ? "eligible" : complete ? "added" : "unverified"}</small></span></button><div class="cards">${snapshot.cards.filter(card => offer.cards[card.id]).map(card => {
         const state = offer.cards[card.id];
-        return `<button class="card ${state} ${selected.includes(card.id) ? "chosen" : ""}" data-card="${escape(card.id)}" ${busy || state !== "addable" ? "disabled" : ""} aria-pressed="${selected.includes(card.id)}" title="${escape(`${card.name}: ${state}`)}">${state === "added" ? "&#10003; " : state === "unknown" ? "? " : ""}${escape(card.name)}</button>`;
+        return `<button class="card ${state} ${selected.includes(card.id) ? "chosen" : ""}" data-card="${escape(card.id)}" ${busy || state !== "addable" ? "disabled" : ""} aria-pressed="${selected.includes(card.id)}" title="${escape(`${card.name}: ${state}`)}">${state === "added" ? "&#10003; " : state === "unknown" ? "Unverified: " : ""}${escape(card.name)}</button>`;
       }).join("")}</div></article>`;
     }).join("");
     if (!root.querySelector("[data-list]").innerHTML) root.querySelector("[data-list]").innerHTML = '<div class="empty">No offers</div>';

@@ -144,7 +144,7 @@ test('Citi: button disappearing without success is not enrolled', async () => {
   dom.window.close();
 });
 function usbFixture() {
-  const fixture = setup('usbank', '<button aria-label="Offer from Merchant A"><span>10% cash back</span></button><span>Offer activated</span>');
+  const fixture = setup('usbank', '<button aria-label="Offer from Merchant A 10% cash back"><span>10% cash back</span></button><span>Offer activated</span>');
   let activationClicks = 0;
   let positive = true;
   fixture.w.document.querySelector('button').onclick = () => {
@@ -162,6 +162,7 @@ test('US Bank: scan opens details read-only, ignores unrelated success text, the
   const card = api.adapter.currentCard();
   const result = await api.adapter.scanCard(card);
   assert.equal(result.offers.length, 1);
+  assert.equal(result.offers[0].name, 'Merchant A');
   assert.equal(result.offers[0].status, 'addable');
   assert.equal(activationClicks(), 0);
   assert.equal(await api.adapter.addOffer(card, result.offers[0]), 'added');

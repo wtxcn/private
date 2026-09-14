@@ -26,9 +26,9 @@ function createUSBankAdapter(env) {
     return null;
   }
   function modal() {
-    const known = all(MODAL).filter(visible).find(node => node.querySelector('#activate-offer, #activated-offer, button, [role="button"]'));
-    if (known) return known;
-    return all("#activate-offer, #activated-offer, #close-action").map(detailFromControl).find(Boolean) || null;
+    const anchored = all("#activate-offer, #activated-offer").filter(visible).map(detailFromControl).find(Boolean);
+    if (anchored) return anchored;
+    return all(MODAL).filter(visible).find(node => node.querySelector("#activate-offer, #activated-offer")) || null;
   }
   function activated(detail) {
     if (!detail || !visible(detail)) return false;
@@ -68,13 +68,15 @@ function createUSBankAdapter(env) {
     return all('button[aria-label^="Offer from "], [role="button"][aria-label^="Offer from "]').filter(node => visible(node) && enabled(node) && !node.closest(MODAL));
   }
   function readButton(node) {
-    const name = (node.getAttribute("aria-label") || "").replace(/^Offer from\s+/i, "").trim();
+    const rawName = (node.getAttribute("aria-label") || "").replace(/^Offer from\s+/i, "").trim();
+    const name = rawName.replace(/\s+(?:\$\s*\d[\d,.]*|\d+(?:\.\d+)?\s*%)(?:\s+(?:cash back|back|off))?\s*$/i, "").trim();
     if (!name) return null;
     const body = text(node).replace(/^New\s+/i, "");
     const reward = (body.match(/(?:\$\s*\d[\d,.]*|\d+(?:\.\d+)?\s*%)(?:\s+(?:cash back|back|off))?/gi) || []).join(" / ");
     const expiry = body.match(/(?:expires?|valid (?:until|through))\s*:?\s*([\w/,-]+(?:\s+\d{1,4})?)/i)?.[0] || "";
     const nativeId = node.getAttribute("data-offer-id") || "";
-    const key = JSON.stringify([normalize(name), normalize(reward), normalize(expiry), nativeId]);
+    // Keep the raw label in the key so existing v0.1.x snapshots update in place.
+    const key = JSON.stringify([normalize(rawName), normalize(reward), normalize(expiry), nativeId]);
     return { key, name, description: [reward, expiry].filter(Boolean).join(" / "), imageUrl: imageUrl(node), status: "unknown", node };
   }
   const readOffers = () => buttons().map(readButton).filter(Boolean);
@@ -113,7 +115,7 @@ function createUSBankAdapter(env) {
           if (modal()) await closeDetail(modal());
           check();
           inspected.set(offer.key, offer);
-          env.log(`Unverified: ${offer.name}`);
+          env.log(`Unverified: ${offer.name} - ${error.message}`);
         }
       }
       return [...inspected.values()];

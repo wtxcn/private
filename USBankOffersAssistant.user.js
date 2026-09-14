@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         U.S. Bank Offers Assistant
 // @namespace    https://onlinebanking.usbank.com/
-// @version      0.1.1
+// @version      0.1.2
 // @description  Scan and select offers locally. Enrollment starts only when you click Add selected.
 // @match        https://onlinebanking.usbank.com/digital/*
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/USBankOffersAssistant.user.js
@@ -222,6 +222,8 @@ function createOffersAssistant(config, adapterFactory) {
     }
     for (const item of incoming) {
       const offer = offers.get(item.key) || { key: item.key, name: item.name, description: item.description || "", imageUrl: item.imageUrl || "", cards: {} };
+      offer.name = item.name;
+      offer.description = item.description || "";
       offer.cards[card.id] = ["added", "addable"].includes(item.status) ? item.status : "unknown";
       if (item.imageUrl) offer.imageUrl = item.imageUrl;
       offers.set(item.key, offer);
@@ -334,15 +336,16 @@ function createOffersAssistant(config, adapterFactory) {
     }).join("") : filtered().map(offer => {
       const eligible = Object.values(offer.cards).filter(s => s === "addable").length;
       const added = Object.values(offer.cards).filter(s => s === "added").length;
+      const unknown = Object.values(offer.cards).filter(s => s === "unknown").length;
       const total = Object.keys(offer.cards).length;
       const selected = snapshot.selected[offer.key] || [];
       const complete = fullyAdded(offer);
       const allSelected = eligible > 0 && Object.entries(offer.cards).filter(([, s]) => s === "addable").every(([id]) => selected.includes(id));
       const key = escape(offer.key);
       const logo = offer.imageUrl ? `<img src="${escape(offer.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="initials">${escape(offer.name.slice(0, 2).toUpperCase())}</span>`;
-      return `<article class="offer ${selected.length ? "selected" : ""}" data-offer="${key}"><button class="offer-head" data-offer-toggle aria-pressed="${allSelected}" aria-label="${escape(`${allSelected ? "Deselect" : "Select"} all eligible ${config.scopePlural} for ${offer.name}`)}" ${busy || !eligible ? "disabled" : ""}><span class="logo">${logo}</span><span class="offer-main"><strong>${escape(offer.name)}</strong><span class="description">${escape(offer.description || "")}</span><span class="${complete ? "green" : "meta"}">${added}/${total} ${escape(config.scopePlural)} added</span></span><span class="count ${complete ? "green" : ""}">${eligible || (complete ? added : "?")}<small>${eligible ? "eligible" : complete ? "added" : "unverified"}</small></span></button><div class="cards">${snapshot.cards.filter(card => offer.cards[card.id]).map(card => {
+      return `<article class="offer ${selected.length ? "selected" : ""}" data-offer="${key}"><button class="offer-head" data-offer-toggle aria-pressed="${allSelected}" aria-label="${escape(`${allSelected ? "Deselect" : "Select"} all eligible ${config.scopePlural} for ${offer.name}`)}" ${busy || !eligible ? "disabled" : ""}><span class="logo">${logo}</span><span class="offer-main"><strong>${escape(offer.name)}</strong><span class="description">${escape(offer.description || "")}</span><span class="${complete ? "green" : "meta"}">${added}/${total} ${escape(config.scopePlural)} added</span></span><span class="count ${complete ? "green" : ""}">${eligible || (complete ? added : unknown)}<small>${eligible ? "eligible" : complete ? "added" : "unverified"}</small></span></button><div class="cards">${snapshot.cards.filter(card => offer.cards[card.id]).map(card => {
         const state = offer.cards[card.id];
-        return `<button class="card ${state} ${selected.includes(card.id) ? "chosen" : ""}" data-card="${escape(card.id)}" ${busy || state !== "addable" ? "disabled" : ""} aria-pressed="${selected.includes(card.id)}" title="${escape(`${card.name}: ${state}`)}">${state === "added" ? "&#10003; " : state === "unknown" ? "? " : ""}${escape(card.name)}</button>`;
+        return `<button class="card ${state} ${selected.includes(card.id) ? "chosen" : ""}" data-card="${escape(card.id)}" ${busy || state !== "addable" ? "disabled" : ""} aria-pressed="${selected.includes(card.id)}" title="${escape(`${card.name}: ${state}`)}">${state === "added" ? "&#10003; " : state === "unknown" ? "Unverified: " : ""}${escape(card.name)}</button>`;
       }).join("")}</div></article>`;
     }).join("");
     if (!root.querySelector("[data-list]").innerHTML) root.querySelector("[data-list]").innerHTML = '<div class="empty">No offers</div>';
@@ -430,9 +433,9 @@ function createUSBankAdapter(env) {
     return null;
   }
   function modal() {
-    const known = all(MODAL).filter(visible).find(node => node.querySelector('#activate-offer, #activated-offer, button, [role="button"]'));
-    if (known) return known;
-    return all("#activate-offer, #activated-offer, #close-action").map(detailFromControl).find(Boolean) || null;
+    const anchored = all("#activate-offer, #activated-offer").filter(visible).map(detailFromControl).find(Boolean);
+    if (anchored) return anchored;
+    return all(MODAL).filter(visible).find(node => node.querySelector("#activate-offer, #activated-offer")) || null;
   }
   function activated(detail) {
     if (!detail || !visible(detail)) return false;
@@ -472,13 +475,15 @@ function createUSBankAdapter(env) {
     return all('button[aria-label^="Offer from "], [role="button"][aria-label^="Offer from "]').filter(node => visible(node) && enabled(node) && !node.closest(MODAL));
   }
   function readButton(node) {
-    const name = (node.getAttribute("aria-label") || "").replace(/^Offer from\s+/i, "").trim();
+    const rawName = (node.getAttribute("aria-label") || "").replace(/^Offer from\s+/i, "").trim();
+    const name = rawName.replace(/\s+(?:\$\s*\d[\d,.]*|\d+(?:\.\d+)?\s*%)(?:\s+(?:cash back|back|off))?\s*$/i, "").trim();
     if (!name) return null;
     const body = text(node).replace(/^New\s+/i, "");
     const reward = (body.match(/(?:\$\s*\d[\d,.]*|\d+(?:\.\d+)?\s*%)(?:\s+(?:cash back|back|off))?/gi) || []).join(" / ");
     const expiry = body.match(/(?:expires?|valid (?:until|through))\s*:?\s*([\w/,-]+(?:\s+\d{1,4})?)/i)?.[0] || "";
     const nativeId = node.getAttribute("data-offer-id") || "";
-    const key = JSON.stringify([normalize(name), normalize(reward), normalize(expiry), nativeId]);
+    // Keep the raw label in the key so existing v0.1.x snapshots update in place.
+    const key = JSON.stringify([normalize(rawName), normalize(reward), normalize(expiry), nativeId]);
     return { key, name, description: [reward, expiry].filter(Boolean).join(" / "), imageUrl: imageUrl(node), status: "unknown", node };
   }
   const readOffers = () => buttons().map(readButton).filter(Boolean);
@@ -517,7 +522,7 @@ function createUSBankAdapter(env) {
           if (modal()) await closeDetail(modal());
           check();
           inspected.set(offer.key, offer);
-          env.log(`Unverified: ${offer.name}`);
+          env.log(`Unverified: ${offer.name} - ${error.message}`);
         }
       }
       return [...inspected.values()];
@@ -548,5 +553,5 @@ function createUSBankAdapter(env) {
   return { assertPage, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
 }
 
-createOffersAssistant({"file":"USBankOffersAssistant.user.js","adapter":"usbank","factory":"createUSBankAdapter","id":"usbank-offers-assistant","name":"U.S. Bank Offers Assistant","version":"0.1.1","namespace":"https://onlinebanking.usbank.com/","match":"https://onlinebanking.usbank.com/digital/*","accent":"#b42339","legacyStore":"usBankOfferClickerState.v1","cardMode":false,"scopePlural":"collections","allLabel":"All deals","scanLabel":"Scan deals","icons":{"card":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"/><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"/></svg>","search":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>","collapse":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg>","trash":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>"}}, createUSBankAdapter);
+createOffersAssistant({"file":"USBankOffersAssistant.user.js","adapter":"usbank","factory":"createUSBankAdapter","id":"usbank-offers-assistant","name":"U.S. Bank Offers Assistant","version":"0.1.2","namespace":"https://onlinebanking.usbank.com/","match":"https://onlinebanking.usbank.com/digital/*","accent":"#b42339","legacyStore":"usBankOfferClickerState.v1","cardMode":false,"scopePlural":"collections","allLabel":"All deals","scanLabel":"Scan deals","icons":{"card":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"/><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"/></svg>","search":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>","collapse":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg>","trash":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>"}}, createUSBankAdapter);
 })();
