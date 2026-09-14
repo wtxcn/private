@@ -6,8 +6,9 @@ const vm = require('node:vm');
 const path = require('node:path');
 const source = fs.readFileSync(path.join(__dirname, '../ChaseOffersAssistant.user.js'), 'utf8');
 
-function load() {
+function load(snapshot) {
   const local = new Map();
+  if (snapshot) local.set('chaseOffersAssistantSnapshot.v1', JSON.stringify(snapshot));
   const context = vm.createContext({
     globalThis: {},
     localStorage: { getItem: (key) => local.get(key) || null, setItem: (key, value) => local.set(key, value) },
@@ -84,7 +85,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.10/);
+  assert.match(source, /@version\s+0\.1\.11/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
@@ -92,4 +93,26 @@ test('the assistant panel uses the refreshed logo, system font, and offer-state 
   assert.match(source, /offer-name \{ color:#071f52; font-size:17px; font-weight:800/);
   assert.match(source, /card\.added \{ color:#28784f; border-color:#76c59a; background:#eaf7ef/);
   assert.match(source, /text-decoration:none/);
+});
+
+test('offer selection toggles all eligible cards, skips added cards, and permits individual changes', () => {
+  const api = load({ cards: [{ id: 'a' }, { id: 'b' }, { id: 'c' }], offers: [
+    { key: 'offer', name: 'Offer', cards: { a: 'addable', b: 'addable', c: 'added' } },
+    { key: 'other', name: 'Other', cards: { a: 'addable' } },
+    { key: 'complete', name: 'Complete', cards: { a: 'added' } }
+  ], selected: { other: ['a'] } });
+  const ids = () => Array.from(api.selectedTasks().filter((task) => task.offer.key === 'offer'), (task) => task.card.id);
+  api.toggleOfferSelection('offer');
+  assert.deepEqual(ids(), ['a', 'b']);
+  assert.equal(api.loadAddRun(), null);
+  api.toggleSelection('offer', 'a');
+  assert.deepEqual(ids(), ['b']);
+  api.toggleOfferSelection('offer');
+  assert.deepEqual(ids(), ['a', 'b']);
+  api.toggleOfferSelection('offer');
+  assert.deepEqual(ids(), []);
+  api.toggleOfferSelection('complete');
+  api.toggleOfferSelection('missing');
+  assert.equal(api.selectedTasks().length, 1);
+  assert.equal(api.selectedTasks()[0].offer.key, 'other');
 });

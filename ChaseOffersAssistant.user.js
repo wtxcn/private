@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.10
+// @version      0.1.11
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -276,11 +276,25 @@
   }
 
   function toggleSelection(key, cardId) {
+    if (scanInProgress || addInProgress) return;
     const selected = new Set(snapshot.selected?.[key] || []);
     if (selected.has(cardId)) selected.delete(cardId);
     else selected.add(cardId);
     if (selected.size) snapshot.selected[key] = [...selected];
     else delete snapshot.selected[key];
+    saveSnapshot();
+    render();
+  }
+
+  function toggleOfferSelection(key) {
+    if (scanInProgress || addInProgress) return;
+    const offer = snapshot.offers.find((item) => item.key === key);
+    if (!offer) return;
+    const eligible = snapshot.cards.filter((card) => offer.cards[card.id] === "addable").map((card) => card.id);
+    if (!eligible.length) return;
+    const selected = snapshot.selected[key] || [];
+    if (eligible.every((id) => selected.includes(id))) delete snapshot.selected[key];
+    else snapshot.selected[key] = eligible;
     saveSnapshot();
     render();
   }
@@ -459,16 +473,20 @@
         const added = Object.values(offer.cards).filter((status) => status === "added").length;
         const visibleOn = Object.keys(offer.cards).length;
         const selectedRow = (snapshot.selected[offer.key] || []).length > 0;
+        const allSelected = addable > 0 && Object.entries(offer.cards)
+          .filter(([, status]) => status === "addable")
+          .every(([id]) => (snapshot.selected[offer.key] || []).includes(id));
+        const selectionDisabled = !addable || scanInProgress || addInProgress;
         const isComplete = addable === 0 && added > 0;
         const logo = offer.imageUrl
           ? `<img class="offer-logo" src="${escapeHtml(offer.imageUrl)}" alt="">`
           : `<span class="offer-logo fallback">${offerInitials(offer.name)}</span>`;
         const meta = isComplete ? `Added to ${added}/${snapshot.cards.length} cards` : `${visibleOn}/${snapshot.cards.length} cards · choose eligible cards`;
-        return `<article class="offer ${selectedRow ? "selected-row" : ""}"><div class="offer-head"><div class="offer-logo-wrap">${logo}</div><div class="offer-main"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="offer-meta ${isComplete ? "complete" : ""}">${meta}</div></div><div class="offer-count ${isComplete ? "complete" : ""}">${isComplete ? added : addable}<span>${isComplete ? "added" : "eligible"}</span></div></div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
+        return `<article class="offer ${selectedRow ? "selected-row" : ""}" data-offer="${escapeHtml(encodeURIComponent(offer.key))}"><button type="button" class="offer-head" data-offer-select aria-pressed="${allSelected}" aria-label="${escapeHtml(`${allSelected ? "Deselect" : "Select"} all eligible cards for ${offer.name}`)}" ${selectionDisabled ? "disabled" : ""}><span class="offer-logo-wrap">${logo}</span><span class="offer-main"><span class="offer-name">${escapeHtml(offer.name)}</span><span class="offer-meta ${isComplete ? "complete" : ""}">${meta}</span></span><span class="offer-count ${isComplete ? "complete" : ""}">${isComplete ? added : addable}<span>${isComplete ? "added" : "eligible"}</span></span></button><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
           const status = offer.cards[card.id];
           const isSelected = (snapshot.selected[offer.key] || []).includes(card.id);
           const classes = `card ${status === "added" ? "added" : isSelected ? "selected" : ""}`;
-          return `<button class="${classes}" data-toggle="${escapeHtml(encodeURIComponent(offer.key))}" data-card="${card.id}" ${status === "added" ? "disabled" : ""}>${escapeHtml(card.name)}</button>`;
+          return `<button class="${classes}" data-toggle="${escapeHtml(encodeURIComponent(offer.key))}" data-card="${card.id}" ${status === "added" || scanInProgress || addInProgress ? "disabled" : ""}>${escapeHtml(card.name)}</button>`;
         }).join("")}</div></article>`;
       }).join("") || "<div class=\"empty\">No offers match this view.</div>";
     panel.innerHTML = `
@@ -514,7 +532,11 @@
         #${ID} .list { display:flex; flex-direction:column; gap:7px; padding:10px 16px 14px; }
         #${ID} .offer { padding:14px; background:#fff; border:1px solid #e9ebf0; border-radius:14px; box-shadow:0 3px 10px rgba(30,57,94,.035); }
         #${ID} .offer.selected-row { border-color:#8eadd7; box-shadow:0 0 0 1px #8eadd7 inset,0 1px 2px rgba(0,23,62,.04); }
-        #${ID} .offer-head { display:flex; align-items:center; gap:12px; }
+        #${ID} .offer { cursor:pointer; }
+        #${ID} button.offer-head { display:flex; align-items:center; gap:12px; width:100%; margin:0; padding:0; border:0; border-radius:0; color:inherit; background:transparent; font:inherit; text-align:left; }
+        #${ID} button.offer-head:disabled { opacity:1; cursor:default; }
+        #${ID} button.offer-head:focus-visible { outline:2px solid #0874cf; outline-offset:4px; }
+        #${ID} .offer-name, #${ID} .offer-meta { display:block; }
         #${ID} .offer-logo-wrap { display:grid; width:64px; height:50px; place-items:center; flex:none; overflow:hidden; }
         #${ID} .offer-logo { display:block; width:100%; height:100%; object-fit:contain; }
         #${ID} .offer-logo.fallback { display:grid; width:42px; height:42px; place-items:center; border-radius:9px; color:#2767a3; background:#e9f2fb; font-size:12px; font-weight:800; }
@@ -585,13 +607,22 @@
       searchInput.focus();
       searchInput.setSelectionRange(searchTerm.length, searchTerm.length);
     }
-    panel.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
+    panel.querySelectorAll("[data-offer]").forEach((row) => row.addEventListener("click", (event) => {
+      if (event.target.closest("[data-toggle]")) return;
+      const key = row.dataset.offer;
+      toggleOfferSelection(decodeURIComponent(key));
+      const updated = Array.from(panel.querySelectorAll("[data-offer]"))
+        .find((item) => item.dataset.offer === key);
+      updated?.querySelector("[data-offer-select]")?.focus({ preventScroll: true });
+    }));
+    panel.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", (event) => {
+      event.stopPropagation();
       toggleSelection(decodeURIComponent(button.dataset.toggle), button.dataset.card);
     }));
   }
 
   if (globalThis.__CHASE_ASSISTANT_TEST__) {
-    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun };
+    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, toggleOfferSelection, toggleSelection };
     return;
   }
 
