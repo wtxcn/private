@@ -175,6 +175,19 @@ test('US Bank: disappearing Activate button without modal success remains unveri
   await assert.rejects(api.adapter.addOffer(api.adapter.currentCard(), api.adapter.readOffers()[0]), /did not confirm/);
   dom.window.close();
 });
+test('US Bank: current OfferHub detail controls identify addable and activated deals', () => {
+  const { dom, api, w } = setup('usbank');
+  const overlay = w.document.createElement('section');
+  overlay.className = 'offerhub-overlay';
+  overlay.innerHTML = '<div><h1>Merchant A</h1><button id="activate-offer">Activate</button><button id="close-action">Close</button></div>';
+  w.document.body.appendChild(overlay);
+  assert.equal(api.adapter.activateButton(api.adapter.modal()), overlay.querySelector('#activate-offer'));
+  assert.equal(api.adapter.activated(api.adapter.modal()), false);
+  overlay.querySelector('#activate-offer').outerHTML = '<button id="activated-offer">Offer activated</button>';
+  assert.equal(api.adapter.activated(api.adapter.modal()), true);
+  assert.equal(typeof api.adapter.closeDetail, 'function');
+  dom.window.close();
+});
 test('packaged scripts have independent identities, no remote library, no confirmation or resume-on-boot', () => {
   for (const name of ['CitiOffersAssistant', 'USBankOffersAssistant']) {
     const code = fs.readFileSync(path.join(base, `${name}.user.js`), 'utf8');

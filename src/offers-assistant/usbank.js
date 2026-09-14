@@ -13,11 +13,27 @@ function createUSBankAdapter(env) {
     assertPage();
     if (card.id !== scope.id) throw new Error("This deal collection is no longer available.");
   }
+  function detailFromControl(control) {
+    if (!control || !visible(control)) return null;
+    const known = control.closest(`${MODAL}, [role="dialog"], [aria-modal="true"]`);
+    if (known && visible(known)) return known;
+    const ownerDocument = control.ownerDocument;
+    let node = control.parentElement;
+    while (node && node !== ownerDocument.body && node !== ownerDocument.documentElement) {
+      if (visible(node) && node.querySelector("h1, h2, h3") && node.querySelector("#close-action, #vicinity-overlay-click-modal--close")) return node;
+      node = node.parentElement;
+    }
+    return null;
+  }
   function modal() {
-    return all(MODAL).filter(visible).find(node => node.querySelector('#activate-offer, button, [role="button"]')) || null;
+    const known = all(MODAL).filter(visible).find(node => node.querySelector('#activate-offer, #activated-offer, button, [role="button"]'));
+    if (known) return known;
+    return all("#activate-offer, #activated-offer, #close-action").map(detailFromControl).find(Boolean) || null;
   }
   function activated(detail) {
     if (!detail || !visible(detail)) return false;
+    const explicit = detail.querySelector("#activated-offer");
+    if (explicit && visible(explicit) && /activated/i.test(text(explicit) || explicit.getAttribute("aria-label") || "")) return true;
     return Array.from(detail.querySelectorAll('button, [role="status"], [aria-label], p, span')).some(node => {
       if (!visible(node)) return false;
       return [text(node), node.getAttribute("aria-label") || ""].some(value =>
@@ -34,6 +50,7 @@ function createUSBankAdapter(env) {
     if (!detail) return null;
     return Array.from(detail.querySelectorAll('button, [role="button"]')).find(node => visible(node) && enabled(node) && (
       node.id === "vicinity-overlay-click-modal--close"
+      || node.id === "close-action"
       || node.getAttribute("data-testid") === "vicinity-overlay-click-modal--close"
       || /modal_close_icon/.test(String(node.className))
       || node.closest(".usb-modal-v2--close")
@@ -124,5 +141,5 @@ function createUSBankAdapter(env) {
       await closeDetail(detail);
     }
   }
-  return { assertPage, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, activated, activateButton, closeDetail };
+  return { assertPage, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
 }
