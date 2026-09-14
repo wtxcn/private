@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.11
+// @version      0.1.12
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -419,14 +419,19 @@
     log("Stop requested. The current page action will finish safely.");
   }
 
-  function filteredOffers() {
+  function isOfferFullyAdded(offer) {
+    const statuses = Object.values(offer.cards);
+    return statuses.length > 0 && statuses.every((status) => status === "added");
+  }
+
+  function filteredOffers(filter = viewFilter, scope = cardFilter) {
     const query = searchTerm.trim().toLowerCase();
     return snapshot.offers.filter((offer) => {
       const statuses = Object.values(offer.cards);
-      if (cardFilter && !offer.cards[cardFilter]) return false;
-      if (viewFilter === "selected" && !(snapshot.selected[offer.key] || []).length) return false;
-      if (viewFilter === "addable" && !statuses.includes("addable")) return false;
-      if (viewFilter === "added" && !statuses.includes("added")) return false;
+      if (scope && !offer.cards[scope]) return false;
+      if (filter === "selected" && !(snapshot.selected[offer.key] || []).length) return false;
+      if (filter === "addable" && !statuses.includes("addable")) return false;
+      if (filter === "added" && !isOfferFullyAdded(offer)) return false;
       return !query || offer.name.toLowerCase().includes(query);
     });
   }
@@ -457,7 +462,7 @@
     const mode = scanInProgress ? "Scanning" : addInProgress ? "Adding" : "Ready";
     const date = snapshot.scannedAt ? new Date(snapshot.scannedAt).toLocaleString() : "Not scanned";
     const addableOffers = snapshot.offers.filter((offer) => Object.values(offer.cards).includes("addable")).length;
-    const addedOffers = snapshot.offers.filter((offer) => Object.values(offer.cards).includes("added")).length;
+    const addedOffers = snapshot.offers.filter(isOfferFullyAdded).length;
     const addablePlacements = countOfferPlacements("addable");
     const addedPlacements = countOfferPlacements("added");
     const selected = selectedCount();
@@ -477,11 +482,11 @@
           .filter(([, status]) => status === "addable")
           .every(([id]) => (snapshot.selected[offer.key] || []).includes(id));
         const selectionDisabled = !addable || scanInProgress || addInProgress;
-        const isComplete = addable === 0 && added > 0;
+        const isComplete = isOfferFullyAdded(offer);
         const logo = offer.imageUrl
           ? `<img class="offer-logo" src="${escapeHtml(offer.imageUrl)}" alt="">`
           : `<span class="offer-logo fallback">${offerInitials(offer.name)}</span>`;
-        const meta = isComplete ? `Added to ${added}/${snapshot.cards.length} cards` : `${visibleOn}/${snapshot.cards.length} cards · choose eligible cards`;
+        const meta = isComplete ? `Added to all ${added} eligible cards` : `${added}/${visibleOn} eligible cards added`;
         return `<article class="offer ${selectedRow ? "selected-row" : ""}" data-offer="${escapeHtml(encodeURIComponent(offer.key))}"><button type="button" class="offer-head" data-offer-select aria-pressed="${allSelected}" aria-label="${escapeHtml(`${allSelected ? "Deselect" : "Select"} all eligible cards for ${offer.name}`)}" ${selectionDisabled ? "disabled" : ""}><span class="offer-logo-wrap">${logo}</span><span class="offer-main"><span class="offer-name">${escapeHtml(offer.name)}</span><span class="offer-meta ${isComplete ? "complete" : ""}">${meta}</span></span><span class="offer-count ${isComplete ? "complete" : ""}">${isComplete ? added : addable}<span>${isComplete ? "added" : "eligible"}</span></span></button><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
           const status = offer.cards[card.id];
           const isSelected = (snapshot.selected[offer.key] || []).includes(card.id);
@@ -622,7 +627,7 @@
   }
 
   if (globalThis.__CHASE_ASSISTANT_TEST__) {
-    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, toggleOfferSelection, toggleSelection };
+    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers };
     return;
   }
 

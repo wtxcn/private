@@ -85,7 +85,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.11/);
+  assert.match(source, /@version\s+0\.1\.12/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
@@ -93,6 +93,35 @@ test('the assistant panel uses the refreshed logo, system font, and offer-state 
   assert.match(source, /offer-name \{ color:#071f52; font-size:17px; font-weight:800/);
   assert.match(source, /card\.added \{ color:#28784f; border-color:#76c59a; background:#eaf7ef/);
   assert.match(source, /text-decoration:none/);
+});
+
+test('Added requires every applicable card, not just one added card', () => {
+  const { isOfferFullyAdded } = load();
+  assert.equal(isOfferFullyAdded({ cards: { a: 'added', b: 'addable' } }), false);
+  assert.equal(isOfferFullyAdded({ cards: { a: 'added', b: 'added' } }), true);
+  assert.equal(isOfferFullyAdded({ cards: { a: 'added' } }), true);
+  assert.equal(isOfferFullyAdded({ cards: {} }), false);
+  assert.equal(isOfferFullyAdded({ cards: { a: 'added', b: 'unknown' } }), false);
+});
+
+test('partial offers stay in Addable even when filtering to an already-added card', () => {
+  const api = load({ cards: [{ id: 'a' }, { id: 'b' }], selected: {}, offers: [
+    { key: 'partial', name: 'Partial', cards: { a: 'added', b: 'addable' } },
+    { key: 'complete', name: 'Complete', cards: { a: 'added', b: 'added' } },
+    { key: 'limited', name: 'Limited', cards: { a: 'added' } },
+    { key: 'new', name: 'New', cards: { b: 'addable' } }
+  ] });
+  const keys = (filter, scope) => Array.from(api.filteredOffers(filter, scope), offer => offer.key);
+  assert.deepEqual(keys('added'), ['complete', 'limited']);
+  assert.deepEqual(keys('addable'), ['partial', 'new']);
+  assert.deepEqual(keys('added', 'a'), ['complete', 'limited']);
+  assert.deepEqual(keys('addable', 'a'), ['partial']);
+  api.mergeCardOffers({ id: 'b' }, [{ key: 'partial', name: 'Partial', status: 'added' },
+    { key: 'complete', name: 'Complete', status: 'added' }, { key: 'new', name: 'New', status: 'addable' }]);
+  assert.ok(keys('added').includes('partial'));
+  assert.ok(!keys('addable').includes('partial'));
+  assert.match(source, /const addedOffers = snapshot\.offers\.filter\(isOfferFullyAdded\)\.length/);
+  assert.match(source, /const isComplete = isOfferFullyAdded\(offer\)/);
 });
 
 test('offer selection toggles all eligible cards, skips added cards, and permits individual changes', () => {
