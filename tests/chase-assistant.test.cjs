@@ -36,3 +36,8 @@ test('strips controls while retaining offer display text', () => {
   const { displayOfferName } = load();
   assert.equal(displayOfferName('3 of 113 Chevron 3% cash back Add offer'), 'Chevron 3% cash back');
 });
+
+test('Chase commerce tiles remain the single source of offer state', () => {
+  assert.match(source, /\[data-testid="commerce-tile"\]/);
+  assert.match(source, /getAttribute\("aria-label"\)/);
+});

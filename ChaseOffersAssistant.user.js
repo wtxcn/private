@@ -1,10 +1,12 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.0
+// @version      0.1.1
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
+// @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/ChaseOffersAssistant.user.js
+// @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/ChaseOffersAssistant.user.js
 // @grant        none
 // @run-at       document-idle
 // ==/UserScript==
@@ -104,6 +106,9 @@
   }
 
   function getCardName(node) {
+    const accountId = node.id.match(/requestCardPayment-(\d+)$/)?.[1];
+    const exactName = accountId ? document.querySelector(`#accounts-name-link-button-${accountId}`) : null;
+    if (exactName) return textOf(exactName);
     let parent = node;
     for (let level = 0; level < 5 && parent; level += 1, parent = parent.parentElement) {
       const name = textOf(parent.querySelector?.('[id^="accounts-name-link-button-"]'));
@@ -125,12 +130,12 @@
   }
 
   function readOffersForCard() {
-    const candidates = Array.from(document.querySelectorAll('button, [role="button"]'))
+    // Chase exposes these in the same page world even when ordinary button queries are incomplete.
+    const tiles = Array.from(document.querySelectorAll('[data-testid="commerce-tile"]'))
       .filter((node) => !node.closest?.(`#${ID}`) && isVisible(node));
-
     const offers = [];
-    for (const node of candidates) {
-      const label = textOf(node);
+    for (const tile of tiles) {
+      const label = `${tile.getAttribute("aria-label") || ""} ${textOf(tile)}`.replace(/\s+/g, " ").trim();
       if (!/\b(add offer|success added)\b/i.test(label)) continue;
       const name = displayOfferName(label);
       const key = normalizeOfferName(name);
@@ -249,9 +254,12 @@
   }
 
   function findAddButton(offer) {
-    return Array.from(document.querySelectorAll('button, [role="button"]'))
-      .filter((node) => !node.closest?.(`#${ID}`) && isVisible(node))
-      .find((node) => normalizeOfferName(textOf(node)) === offer.key && /\badd offer\b/i.test(textOf(node)));
+    return Array.from(document.querySelectorAll('[data-testid="commerce-tile"]'))
+      .filter((tile) => !tile.closest?.(`#${ID}`) && isVisible(tile))
+      .find((tile) => {
+        const label = `${tile.getAttribute("aria-label") || ""} ${textOf(tile)}`;
+        return normalizeOfferName(label) === offer.key && /\badd offer\b/i.test(label);
+      });
   }
 
   async function addSelectedOffers() {
