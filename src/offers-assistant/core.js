@@ -2,6 +2,7 @@ function createOffersAssistant(config, adapterFactory) {
   "use strict";
   const ID = config.id;
   const STORE = `${ID}.snapshot.v1`;
+  const HUB_SOURCE = `cardOffersHubSource.${config.adapter}.v1`;
   const ownSelectors = `#${ID}, #citi-offer-clicker, #usbank-offer-clicker`;
   let busy = false;
   let cancelled = false;
@@ -83,6 +84,18 @@ function createOffersAssistant(config, adapterFactory) {
   function save() {
     try { localStorage.setItem(STORE, JSON.stringify({ ...snapshot, selected: {}, logs: [] })); }
     catch (_) { status = "Storage unavailable; this scan is in memory only"; }
+  }
+  function publishHubSnapshot() {
+    if (!snapshot.scannedAt) return;
+    try {
+      const clean = {
+        cards: snapshot.cards.map(({ id, name }) => ({ id, name })),
+        offers: snapshot.offers.map(({ key, name, description = "", imageUrl = "", cards }) => ({ key, name, description, imageUrl, cards: { ...cards } })),
+        scannedAt: snapshot.scannedAt
+      };
+      localStorage.setItem(HUB_SOURCE, JSON.stringify({ bank: config.adapter, publishedAt: Date.now(), snapshot: clean }));
+      window.dispatchEvent(new CustomEvent("card-offers-hub-source", { detail: { bank: config.adapter } }));
+    } catch (_) { /* Hub sync must never interrupt the bank assistant. */ }
   }
   function log(message) {
     snapshot.logs.push(`[${new Date().toLocaleTimeString()}] ${message}`);
@@ -217,7 +230,7 @@ function createOffersAssistant(config, adapterFactory) {
           log(`Skipped ${card.name}: ${error.message}`);
         }
       }
-      if (completed) { snapshot.scannedAt = Date.now(); save(); }
+      if (completed) { snapshot.scannedAt = Date.now(); save(); publishHubSnapshot(); }
       status = completed === cards.length ? "Scan complete" : "Scan incomplete";
     } catch (error) { status = error.message; log(status); }
     finally { busy = false; render(); }
@@ -245,14 +258,14 @@ function createOffersAssistant(config, adapterFactory) {
           offer.cards[card.id] = "added";
           snapshot.selected[offer.key] = (snapshot.selected[offer.key] || []).filter(id => id !== card.id);
           if (!snapshot.selected[offer.key].length) delete snapshot.selected[offer.key];
-          added += 1; save(); log(`Added: ${offer.name} - ${card.name}`);
+          added += 1; save(); publishHubSnapshot(); log(`Added: ${offer.name} - ${card.name}`);
         } catch (error) {
           if (cancelled) throw error;
           unverified += 1;
           // An uncertain click must not be displayed as added or blindly retried.
           offer.cards[card.id] = "unknown";
           snapshot.selected[offer.key] = (snapshot.selected[offer.key] || []).filter(id => id !== card.id);
-          save(); log(`Not verified: ${offer.name} - ${error.message}`);
+          save(); publishHubSnapshot(); log(`Not verified: ${offer.name} - ${error.message}`);
         }
         if (index < queue.length - 1) { await sleep(5000); check(); }
       }

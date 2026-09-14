@@ -4,6 +4,7 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 
 ## Scripts
 
+- `CardOffersHub.user.js`: combined private local search for P1/P2 offer snapshots.
 - `CitiOffersAssistant.user.js`: new selectable-offer assistant for Citi Merchant Offers.
 - `USBankOffersAssistant.user.js`: new selectable-deal assistant for U.S. Bank.
 - `AmexNativeOfferClicker.user.js`: Amex Offers helper.
@@ -11,6 +12,26 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 - `CitiOfferClicker.user.js`: Citi Merchant Offers helper.
 - `USBankOfferClicker.user.js`: U.S. Bank cash-back deals helper.
 - `FidelityFullViewRefresher.user.js`: Fidelity Full View helper for refreshing linked institutions.
+
+## Card Offers Hub
+
+Install `CardOffersHub.user.js` alongside the bank assistants. It starts as a small
+movable `Offer Hub` button on supported bank pages and on this repository page. Choose
+whether the currently logged-in bank account belongs to P1 or P2 before scanning. A
+completed Chase, Citi or U.S. Bank scan is then copied into the Hub automatically;
+confirmed enrollment changes are copied as well. On Amex Offers pages, the Hub records
+the currently visible addable offers for the selected card without clicking them.
+
+The Hub combines both people and every supported bank in one search. Results show the
+person, bank, masked card name, state and scan age. Filters cover P1/P2, bank and offer
+state, and the current combined data can be downloaded as JSON or CSV. Full internal
+card identifiers are replaced with local hashes before entering Hub storage. Logs,
+selections, queues, image URLs, cookies and login information are not copied.
+
+Hub data stays in Tampermonkey storage in the current browser profile. P1/P2 selection
+is remembered separately for each bank. When changing which person's account is logged
+in, switch that bank's label before running its scan so the new snapshot does not replace
+the other person's saved copy. Opening a bank never starts a full scan or enrollment.
 
 ## New Citi and U.S. Bank Assistants
 

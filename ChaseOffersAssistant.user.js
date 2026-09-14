@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.14
+// @version      0.1.15
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -16,6 +16,7 @@
 
   const ID = "chase-offers-assistant";
   const SNAPSHOT_KEY = "chaseOffersAssistantSnapshot.v1";
+  const HUB_SOURCE_KEY = "cardOffersHubSource.chase.v1";
   const ADD_RUN_KEY = "chaseOffersAssistantAddRun.v1";
   const ADD_RUN_TTL_MS = 120000;
   const OVERVIEW_URL = "https://secure.chase.com/web/auth/dashboard#/dashboard/overview";
@@ -48,6 +49,21 @@
 
   function saveSnapshot() {
     localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot));
+  }
+
+  function publishHubSnapshot() {
+    if (!snapshot.scannedAt) return;
+    try {
+      const clean = {
+        cards: snapshot.cards.map(({ id, name }) => ({ id, name })),
+        offers: snapshot.offers.map(({ key, name, imageUrl = "", cards }) => ({ key, name, imageUrl, cards: { ...cards } })),
+        scannedAt: snapshot.scannedAt
+      };
+      localStorage.setItem(HUB_SOURCE_KEY, JSON.stringify({ bank: "chase", publishedAt: Date.now(), snapshot: clean }));
+      window.dispatchEvent(new CustomEvent("card-offers-hub-source", { detail: { bank: "chase" } }));
+    } catch (_) {
+      // Hub sync must never interrupt Chase scanning or enrollment.
+    }
   }
 
   function loadAddRun() {
@@ -258,6 +274,7 @@
       if (!cancelRequested) {
         snapshot.scannedAt = Date.now();
         saveSnapshot();
+        publishHubSnapshot();
         log(`Scan complete: ${snapshot.offers.length} unique offer(s).`);
       }
     } catch (error) {
@@ -391,6 +408,7 @@
           snapshot.selected[offer.key] = (snapshot.selected[offer.key] || []).filter((id) => id !== card.id);
           if (!snapshot.selected[offer.key]?.length) delete snapshot.selected[offer.key];
           saveSnapshot();
+          publishHubSnapshot();
           log(`Added ${offer.name} to ${card.name}.`);
         } else {
           log(`Could not confirm ${offer.name} on ${card.name}; review it in Chase before retrying.`);

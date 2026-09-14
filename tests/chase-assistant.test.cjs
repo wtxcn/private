@@ -99,7 +99,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.14/);
+  assert.match(source, /@version\s+0\.1\.15/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
@@ -107,6 +107,8 @@ test('the assistant panel uses the refreshed logo, system font, and offer-state 
   assert.match(source, /offer-name \{ color:#071f52; font-size:17px; font-weight:800/);
   assert.match(source, /card\.added \{ color:#28784f; border-color:#76c59a; background:#eaf7ef/);
   assert.match(source, /text-decoration:none/);
+  assert.match(source, /cardOffersHubSource\.chase\.v1/);
+  assert.match(source, /publishHubSnapshot\(\)/);
 });
 
 test('Chase panel minimizes to a movable launcher and stays minimized across renders', () => {

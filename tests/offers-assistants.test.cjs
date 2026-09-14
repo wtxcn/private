@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const base = path.join(__dirname, '..');
 const core = fs.readFileSync(path.join(base, 'src/offers-assistant/core.js'), 'utf8');
 const adapterSource = bank => fs.readFileSync(path.join(base, 'src/offers-assistant', `${bank}.js`), 'utf8');
-const config = bank => ({ id: `${bank}-offers-assistant`, name: `${bank} Offers`, version: '0.1.0', legacyStore: `${bank}OfferClickerState.v1`, legacyPanel: `${bank === 'citi' ? 'citi' : 'usbank'}-offer-clicker`, scopePlural: 'cards', allLabel: 'All cards', scanLabel: 'Scan all cards', cardMode: true, icons: { card: '', collapse: '', search: '', trash: '' } });
+const config = bank => ({ adapter: bank, id: `${bank}-offers-assistant`, name: `${bank} Offers`, version: '0.1.0', legacyStore: `${bank}OfferClickerState.v1`, legacyPanel: `${bank === 'citi' ? 'citi' : 'usbank'}-offer-clicker`, scopePlural: 'cards', allLabel: 'All cards', scanLabel: 'Scan all cards', cardMode: true, icons: { card: '', collapse: '', search: '', trash: '' } });
 function setup(bank = 'citi', html = '', seed) {
   const url = bank === 'citi' ? 'https://online.citi.com/US/nga/products-offers/merchantoffers' : 'https://onlinebanking.usbank.com/digital/servicing/dominjection/cashback-deals';
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true });
@@ -83,6 +83,7 @@ for (const bank of ['citi', 'usbank']) {
     assert.equal(api.tasks().length, 0);
     assert.ok(api.filtered('added').some(o => o.key === 'ready'));
     assert.equal(dom.window.sessionStorage.length, 0);
+    assert.ok(dom.window.localStorage.getItem(`cardOffersHubSource.${bank}.v1`));
     dom.window.close();
   });
   test(`${bank}: real panel click bubbles once and continuous search retains the input node`, () => {
@@ -223,6 +224,7 @@ test('packaged scripts have independent identities, no remote library, no confir
     assert.match(code, /data-minimize/);
     assert.match(code, /data-restore/);
     assert.match(code, /pointermove/);
+    assert.match(code, /cardOffersHubSource\.\$\{config\.adapter\}\.v1/);
   }
 });
 
