@@ -85,7 +85,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.12/);
+  assert.match(source, /@version\s+0\.1\.13/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
@@ -93,6 +93,16 @@ test('the assistant panel uses the refreshed logo, system font, and offer-state 
   assert.match(source, /offer-name \{ color:#071f52; font-size:17px; font-weight:800/);
   assert.match(source, /card\.added \{ color:#28784f; border-color:#76c59a; background:#eaf7ef/);
   assert.match(source, /text-decoration:none/);
+});
+
+test('Add selected starts the guarded queue without an extra confirmation dialog', () => {
+  const handler = source.slice(source.indexOf('async function addSelectedOffers()'), source.indexOf('function stopCurrentRun()'));
+  assert.doesNotMatch(source, /window\.confirm\s*\(/);
+  assert.match(handler, /if \(!tasks\.length \|\| scanInProgress \|\| addInProgress\) return/);
+  assert.match(handler, /saveAddRun\(/);
+  assert.match(handler, /await processAddRun\(\)/);
+  assert.match(source, /addEventListener\("click", addSelectedOffers\)/);
+  assert.match(source, /if \(pendingRun\?\.resumeUntil > Date\.now\(\)\)/);
 });
 
 test('Added requires every applicable card, not just one added card', () => {

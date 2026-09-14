@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.12
-// @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
+// @version      0.1.13
+// @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/ChaseOffersAssistant.user.js
@@ -408,7 +408,6 @@
   async function addSelectedOffers() {
     const tasks = selectedTasks();
     if (!tasks.length || scanInProgress || addInProgress) return;
-    if (!window.confirm(`Add ${tasks.length} selected offer(s)? Chase will apply each offer to the selected card.`)) return;
     saveAddRun({ tasks: tasks.map(({ offer, card }) => ({ offerKey: offer.key, cardId: card.id })), index: 0 });
     await processAddRun();
   }
