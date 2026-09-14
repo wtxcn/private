@@ -35,6 +35,7 @@ test('keeps reward amounts as part of the offer identity', () => {
 test('strips controls while retaining offer display text', () => {
   const { displayOfferName } = load();
   assert.equal(displayOfferName('3 of 113 Chevron 3% cash back Add offer'), 'Chevron 3% cash back');
+  assert.equal(displayOfferName('[solidcore] 15% cash back Add offer [solidcore] 15% cash back'), '[solidcore] 15% cash back');
 });
 
 test('Chase commerce tiles remain the single source of offer state', () => {

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.1
+// @version      0.1.2
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -24,6 +24,7 @@
   let addInProgress = false;
   let cancelRequested = false;
   let searchTerm = "";
+  let viewFilter = "all";
   let snapshot = loadSnapshot();
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -66,21 +67,21 @@
     }[character]));
   }
 
-  function normalizeOfferName(value) {
+  function offerTitleText(value) {
     return String(value || "")
       .replace(/^\d+\s+of\s+\d+\s+/i, "")
-      .replace(/\b(add offer|success added|new|expiring soon|last day|\d+\s*(?:d|days?)\s*left)\b/ig, "")
+      .split(/\b(?:add offer|success added)\b/i)[0]
+      .replace(/\b(new|expiring soon|last day|\d+\s*(?:d|days?)\s*left)\b/ig, "")
       .replace(/\s+/g, " ")
-      .trim()
-      .toLowerCase();
+      .trim();
+  }
+
+  function normalizeOfferName(value) {
+    return offerTitleText(value).toLowerCase();
   }
 
   function displayOfferName(value) {
-    return String(value || "")
-      .replace(/^\d+\s+of\s+\d+\s+/i, "")
-      .replace(/\b(add offer|success added|new)\b/ig, "")
-      .replace(/\s+/g, " ")
-      .trim();
+    return offerTitleText(value);
   }
 
   function offerHubUrl(accountId) {
@@ -318,8 +319,12 @@
 
   function filteredOffers() {
     const query = searchTerm.trim().toLowerCase();
-    if (!query) return snapshot.offers;
-    return snapshot.offers.filter((offer) => offer.name.toLowerCase().includes(query));
+    return snapshot.offers.filter((offer) => {
+      const statuses = Object.values(offer.cards);
+      if (viewFilter === "addable" && !statuses.includes("addable")) return false;
+      if (viewFilter === "added" && !statuses.includes("added")) return false;
+      return !query || offer.name.toLowerCase().includes(query);
+    });
   }
 
   function selectedCount() {
@@ -338,48 +343,82 @@
     const offers = filteredOffers();
     const mode = scanInProgress ? "Scanning" : addInProgress ? "Adding" : "Ready";
     const date = snapshot.scannedAt ? new Date(snapshot.scannedAt).toLocaleString() : "Not scanned";
+    const addableOffers = snapshot.offers.filter((offer) => Object.values(offer.cards).includes("addable")).length;
+    const addedOffers = snapshot.offers.filter((offer) => Object.values(offer.cards).includes("added")).length;
+    const selected = selectedCount();
     panel.innerHTML = `
       <style>
-        #${ID} { position:fixed; z-index:2147483647; top:86px; right:16px; width:min(510px,calc(100vw - 32px)); max-height:calc(100vh - 104px); display:flex; flex-direction:column; color:#172033; background:#fff; border:1px solid #b9c5d8; border-radius:8px; box-shadow:0 12px 32px rgba(15,23,42,.25); font:13px/1.35 Arial,sans-serif; }
+        #${ID} { position:fixed; z-index:2147483647; top:82px; right:16px; width:min(660px,calc(100vw - 32px)); max-height:calc(100vh - 98px); display:flex; flex-direction:column; overflow:hidden; color:#142033; background:#f5f7fb; border:1px solid #9eafc6; border-radius:8px; box-shadow:0 16px 40px rgba(0,23,62,.24); font:13px/1.35 Arial,sans-serif; }
         #${ID} * { box-sizing:border-box; }
-        #${ID} header { display:flex; align-items:center; justify-content:space-between; padding:10px 12px; border-bottom:1px solid #dce3ee; font-weight:700; }
-        #${ID} main { min-height:0; padding:10px 12px; overflow:auto; }
-        #${ID} button { margin:0 5px 6px 0; border:1px solid #075aaf; border-radius:5px; padding:7px 9px; color:#fff; background:#075aaf; font:inherit; cursor:pointer; }
-        #${ID} button.secondary { color:#075aaf; background:#fff; }
-        #${ID} button.danger { border-color:#b42318; background:#b42318; }
+        #${ID} header { display:flex; align-items:center; justify-content:space-between; padding:13px 16px; color:#fff; background:#0b2f60; border-bottom:3px solid #1677c8; }
+        #${ID} .brand { font-size:15px; font-weight:700; }
+        #${ID} .subbrand { margin-top:1px; color:#bdd4ee; font-size:11px; }
+        #${ID} .run-state { color:#d9eafb; font-size:12px; font-weight:700; }
+        #${ID} main { min-height:0; overflow:auto; }
+        #${ID} .controls { position:sticky; top:0; z-index:2; padding:12px 16px 10px; background:#f5f7fb; border-bottom:1px solid #d6e0ed; }
+        #${ID} button { border:1px solid #0a5da9; border-radius:5px; padding:7px 10px; color:#fff; background:#0a5da9; font:600 12px/1.2 Arial,sans-serif; cursor:pointer; }
+        #${ID} button + button { margin-left:6px; }
+        #${ID} button.secondary { color:#0a5da9; background:#fff; }
+        #${ID} button.danger { border-color:#b3261e; background:#b3261e; }
         #${ID} button:disabled { opacity:.55; cursor:not-allowed; }
-        #${ID} input { width:100%; padding:7px 8px; border:1px solid #aebcd0; border-radius:5px; font:inherit; }
-        #${ID} .summary { margin:5px 0 9px; color:#4b596d; }
-        #${ID} .offer { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:5px 8px; padding:8px 0; border-top:1px solid #e2e8f0; }
-        #${ID} .offer-name { font-weight:700; overflow-wrap:anywhere; }
-        #${ID} .cards { grid-column:1/-1; display:flex; flex-wrap:wrap; gap:5px; }
-        #${ID} .card { margin:0; padding:4px 6px; border-color:#aebcd0; background:#fff; color:#334155; font-size:11px; }
-        #${ID} .card.selected { color:#fff; border-color:#075aaf; background:#075aaf; }
-        #${ID} .card.added { color:#64748b; border-color:#cbd5e1; background:#f8fafc; cursor:default; }
-        #${ID} .status { color:#4b596d; font-size:12px; }
-        #${ID} .logs { margin-top:9px; max-height:120px; overflow:auto; padding:7px; border-radius:5px; background:#101827; color:#dbeafe; white-space:pre-wrap; font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; }
+        #${ID} .actions { display:flex; flex-wrap:wrap; gap:6px; }
+        #${ID} .actions button + button { margin-left:0; }
+        #${ID} .search { display:flex; align-items:center; margin-top:10px; padding:0 10px; background:#fff; border:1px solid #b9c9dc; border-radius:5px; box-shadow:0 1px 2px rgba(0,23,62,.04); }
+        #${ID} .search span { color:#58708e; font-weight:700; }
+        #${ID} input { width:100%; padding:9px 8px; border:0; outline:0; color:#142033; background:transparent; font:inherit; }
+        #${ID} .stats { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:7px; margin-top:10px; }
+        #${ID} .stat { min-width:0; padding:8px 9px; background:#fff; border:1px solid #d5dfeb; border-radius:6px; box-shadow:0 1px 2px rgba(0,23,62,.03); }
+        #${ID} .stat b { display:block; color:#102e55; font-size:16px; font-variant-numeric:tabular-nums; }
+        #${ID} .stat span { display:block; margin-top:1px; color:#61738a; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        #${ID} .filters { display:flex; align-items:center; gap:2px; margin-top:10px; }
+        #${ID} .filter { border:0; border-radius:0; padding:6px 9px; color:#52667e; background:transparent; font-weight:700; }
+        #${ID} .filter + .filter { margin-left:0; }
+        #${ID} .filter.active { color:#0b2f60; box-shadow:inset 0 -2px 0 #1478c9; }
+        #${ID} .list { display:flex; flex-direction:column; gap:7px; padding:10px 16px 14px; }
+        #${ID} .offer { padding:10px 11px; background:#fff; border:1px solid #d7e0ec; border-radius:7px; box-shadow:0 1px 2px rgba(0,23,62,.04); }
+        #${ID} .offer.selected-row { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset,0 1px 2px rgba(0,23,62,.04); }
+        #${ID} .offer-head { display:flex; align-items:flex-start; gap:12px; }
+        #${ID} .offer-main { flex:1; min-width:0; }
+        #${ID} .offer-name { color:#142033; font-size:13px; font-weight:700; line-height:1.3; overflow-wrap:anywhere; }
+        #${ID} .offer-meta { margin-top:2px; color:#71839a; font-size:11px; }
+        #${ID} .offer-count { min-width:48px; color:#0b2f60; font-size:12px; font-weight:700; text-align:right; font-variant-numeric:tabular-nums; }
+        #${ID} .offer-count span { display:block; color:#71839a; font-size:10px; font-weight:400; }
+        #${ID} .cards { display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
+        #${ID} .card { margin:0; padding:5px 7px; border-color:#b7c8db; background:#fff; color:#40536b; font-size:11px; font-weight:600; }
+        #${ID} .card.selected { color:#fff; border-color:#0a5da9; background:#0a5da9; }
+        #${ID} .card.added { color:#789; border-color:#d8e1eb; background:#f5f7fa; cursor:default; text-decoration:line-through; }
+        #${ID} .empty { padding:30px 16px; color:#64748b; text-align:center; }
+        #${ID} details { margin:0 16px 14px; border-top:1px solid #d6e0ed; }
+        #${ID} summary { padding:9px 0; color:#5e7088; font-size:11px; font-weight:700; cursor:pointer; }
+        #${ID} .logs { max-height:110px; overflow:auto; margin-bottom:10px; padding:8px; border-radius:5px; background:#102746; color:#d9eafb; white-space:pre-wrap; font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; }
+        @media (max-width:560px) { #${ID} { right:8px; width:calc(100vw - 16px); } #${ID} .stats { grid-template-columns:repeat(2,minmax(0,1fr)); } #${ID} .actions button { flex:1 1 auto; } }
       </style>
-      <header><span>Chase Offers Assistant</span><span class="status">${mode}</span></header>
+      <header><div><div class="brand">Chase Offers</div><div class="subbrand">Offer Assistant</div></div><span class="run-state">${mode}</span></header>
       <main>
-        <div>
+        <div class="controls">
+          <div class="actions">
           <button data-scan ${scanInProgress || addInProgress ? "disabled" : ""}>Scan all cards</button>
           <button class="secondary" data-select ${scanInProgress || addInProgress ? "disabled" : ""}>Select visible</button>
           <button class="secondary" data-clear ${scanInProgress || addInProgress ? "disabled" : ""}>Clear</button>
-          <button data-add ${selectedCount() && !scanInProgress && !addInProgress ? "" : "disabled"}>Add selected (${selectedCount()})</button>
+          <button data-add ${selected && !scanInProgress && !addInProgress ? "" : "disabled"}>Add selected (${selected})</button>
           <button class="danger" data-stop ${scanInProgress || addInProgress ? "" : "disabled"}>Stop</button>
+          </div>
+          <label class="search"><span>Search</span><input data-search placeholder="Search scanned offers" value="${escapeHtml(searchTerm)}"></label>
+          <div class="stats"><div class="stat"><b>${snapshot.cards.length}</b><span>Cards</span></div><div class="stat"><b>${snapshot.offers.length}</b><span>Offers</span></div><div class="stat"><b>${addableOffers}</b><span>Addable</span></div><div class="stat"><b>${selected}</b><span>Selected</span></div></div>
+          <div class="filters"><button class="filter ${viewFilter === "all" ? "active" : ""}" data-filter="all">All ${snapshot.offers.length}</button><button class="filter ${viewFilter === "addable" ? "active" : ""}" data-filter="addable">Addable ${addableOffers}</button><button class="filter ${viewFilter === "added" ? "active" : ""}" data-filter="added">Added ${addedOffers}</button></div>
         </div>
-        <input data-search placeholder="Search scanned offers" value="${escapeHtml(searchTerm)}">
-        <div class="summary">${snapshot.cards.length} cards | ${snapshot.offers.length} offers | ${date}</div>
-        <section>${offers.slice(0, 400).map((offer) => {
+        <section class="list">${offers.slice(0, 400).map((offer) => {
           const addable = Object.values(offer.cards).filter((status) => status === "addable").length;
-          return `<div class="offer"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="status">${addable} addable</div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
+          const added = Object.values(offer.cards).filter((status) => status === "added").length;
+          const selectedRow = (snapshot.selected[offer.key] || []).length > 0;
+          return `<article class="offer ${selectedRow ? "selected-row" : ""}"><div class="offer-head"><div class="offer-main"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="offer-meta">${added ? `${added} already added` : "Choose cards below"}</div></div><div class="offer-count">${addable}<span>available</span></div></div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
             const status = offer.cards[card.id];
-            const selected = (snapshot.selected[offer.key] || []).includes(card.id);
-            const classes = `card ${status === "added" ? "added" : selected ? "selected" : ""}`;
+            const isSelected = (snapshot.selected[offer.key] || []).includes(card.id);
+            const classes = `card ${status === "added" ? "added" : isSelected ? "selected" : ""}`;
             return `<button class="${classes}" data-toggle="${escapeHtml(encodeURIComponent(offer.key))}" data-card="${card.id}" ${status === "added" ? "disabled" : ""}>${escapeHtml(card.name)}</button>`;
-          }).join("")}</div></div>`;
-        }).join("") || "<div class=\"summary\">Run Scan all cards to build your offer list.</div>"}</section>
-        <div class="logs">${escapeHtml((snapshot.logs || []).join("\n"))}</div>
+          }).join("")}</div></article>`;
+        }).join("") || "<div class=\"empty\">Run Scan all cards to build your offer list.</div>"}</section>
+        <details><summary>Scan log · ${date}</summary><div class="logs">${escapeHtml((snapshot.logs || []).join("\n"))}</div></details>
       </main>`;
 
     panel.querySelector("[data-scan]")?.addEventListener("click", scanAllCards);
@@ -388,6 +427,7 @@
     panel.querySelector("[data-add]")?.addEventListener("click", addSelectedOffers);
     panel.querySelector("[data-stop]")?.addEventListener("click", () => { cancelRequested = true; log("Stop requested. The current page action will finish safely."); });
     panel.querySelector("[data-search]")?.addEventListener("input", (event) => { searchTerm = event.target.value; render(); });
+    panel.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => { viewFilter = button.dataset.filter; render(); }));
     panel.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
       toggleSelection(decodeURIComponent(button.dataset.toggle), button.dataset.card);
     }));
