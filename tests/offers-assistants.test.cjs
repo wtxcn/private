@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 const base = path.join(__dirname, '..');
 const core = fs.readFileSync(path.join(base, 'src/offers-assistant/core.js'), 'utf8');
 const adapterSource = bank => fs.readFileSync(path.join(base, 'src/offers-assistant', `${bank}.js`), 'utf8');
-const config = bank => ({ id: `${bank}-offers-assistant`, name: `${bank} Offers`, version: '0.1.0', legacyStore: `${bank}OfferClickerState.v1`, scopePlural: 'cards', allLabel: 'All cards', scanLabel: 'Scan all cards', cardMode: true, icons: { card: '', collapse: '', search: '', trash: '' } });
+const config = bank => ({ id: `${bank}-offers-assistant`, name: `${bank} Offers`, version: '0.1.0', legacyStore: `${bank}OfferClickerState.v1`, legacyPanel: `${bank === 'citi' ? 'citi' : 'usbank'}-offer-clicker`, scopePlural: 'cards', allLabel: 'All cards', scanLabel: 'Scan all cards', cardMode: true, icons: { card: '', collapse: '', search: '', trash: '' } });
 function setup(bank = 'citi', html = '', seed) {
   const url = bank === 'citi' ? 'https://online.citi.com/US/nga/products-offers/merchantoffers' : 'https://onlinebanking.usbank.com/digital/servicing/dominjection/cashback-deals';
   const dom = new JSDOM(html, { url, runScripts: 'outside-only', pretendToBeVisual: true });
@@ -204,5 +204,25 @@ test('an omitted card-offer record on rescan cannot make a partial offer fully a
   api.merge({ id: 'b', name: 'Test Card B' }, [], true);
   assert.equal(api.snapshot().offers.find(o => o.key === 'partial').cards.b, 'unknown');
   assert.ok(!api.filtered('added').some(o => o.key === 'partial'));
+  dom.window.close();
+});
+
+test('a stale legacy active flag does not block scanning after the old clicker is disabled', async () => {
+  const { dom, api, w } = setup('citi');
+  w.localStorage.setItem('citiOfferClickerState.v1', JSON.stringify({ active: true, phase: 'running' }));
+  api.adapter.assertPage = () => {};
+  api.adapter.discoverCards = async () => [{ id: 'card:a', name: 'Test Card (...1111)' }];
+  api.adapter.openCard = async () => {};
+  let scans = 0;
+  api.adapter.scanCard = async () => { scans += 1; return { offers: [], complete: true }; };
+  await api.scan();
+  assert.equal(scans, 1);
+
+  const legacyPanel = w.document.createElement('aside');
+  legacyPanel.id = 'citi-offer-clicker';
+  w.document.body.appendChild(legacyPanel);
+  await api.scan();
+  assert.equal(scans, 1);
+  assert.match(api.snapshot().logs.at(-1), /old clicker is running/i);
   dom.window.close();
 });

@@ -179,7 +179,12 @@ function createOffersAssistant(config, adapterFactory) {
     save();
   }
   function legacyRunning() {
-    try { return Boolean(JSON.parse(localStorage.getItem(config.legacyStore) || "null")?.active); }
+    try {
+      const active = Boolean(JSON.parse(localStorage.getItem(config.legacyStore) || "null")?.active);
+      // Old clickers can leave active=true behind after they are disabled. Their
+      // panel is the reliable signal that a legacy worker exists on this page.
+      return active && Boolean(config.legacyPanel && document.getElementById(config.legacyPanel));
+    }
     catch (_) { return false; }
   }
   function assertLegacyStopped() {
