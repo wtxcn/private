@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.5
+// @version      0.1.6
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -28,6 +28,7 @@
   let searchTerm = "";
   let viewFilter = "all";
   let cardFilter = "";
+  let cardSummaryMode = false;
   let snapshot = loadSnapshot();
 
   const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -398,6 +399,7 @@
     return snapshot.offers.filter((offer) => {
       const statuses = Object.values(offer.cards);
       if (cardFilter && !offer.cards[cardFilter]) return false;
+      if (viewFilter === "selected" && !(snapshot.selected[offer.key] || []).length) return false;
       if (viewFilter === "addable" && !statuses.includes("addable")) return false;
       if (viewFilter === "added" && !statuses.includes("added")) return false;
       return !query || offer.name.toLowerCase().includes(query);
@@ -434,6 +436,25 @@
     const addablePlacements = countOfferPlacements("addable");
     const addedPlacements = countOfferPlacements("added");
     const selected = selectedCount();
+    const listContent = cardSummaryMode
+      ? snapshot.cards.map((card) => {
+        const cardOffers = snapshot.offers.filter((offer) => offer.cards[card.id]);
+        const cardAddable = cardOffers.filter((offer) => offer.cards[card.id] === "addable").length;
+        const cardAdded = cardOffers.filter((offer) => offer.cards[card.id] === "added").length;
+        return `<button class="card-summary" data-card-summary="${card.id}"><span class="card-summary-name">${escapeHtml(card.name)}</span><span class="card-summary-count"><b>${cardOffers.length}</b> offers</span><span class="card-summary-meta">${cardAddable} addable · ${cardAdded} added</span></button>`;
+      }).join("") || "<div class=\"empty\">Run Scan all cards to build your card summary.</div>"
+      : offers.map((offer) => {
+        const addable = Object.values(offer.cards).filter((status) => status === "addable").length;
+        const added = Object.values(offer.cards).filter((status) => status === "added").length;
+        const visibleOn = Object.keys(offer.cards).length;
+        const selectedRow = (snapshot.selected[offer.key] || []).length > 0;
+        return `<article class="offer ${selectedRow ? "selected-row" : ""}"><div class="offer-head"><div class="offer-main"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="offer-meta">${visibleOn}/${snapshot.cards.length} cards · ${added ? `${added} added` : "Choose cards below"}</div></div><div class="offer-count">${addable}<span>addable</span></div></div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
+          const status = offer.cards[card.id];
+          const isSelected = (snapshot.selected[offer.key] || []).includes(card.id);
+          const classes = `card ${status === "added" ? "added" : isSelected ? "selected" : ""}`;
+          return `<button class="${classes}" data-toggle="${escapeHtml(encodeURIComponent(offer.key))}" data-card="${card.id}" ${status === "added" ? "disabled" : ""}>${escapeHtml(card.name)}</button>`;
+        }).join("")}</div></article>`;
+      }).join("") || "<div class=\"empty\">No offers match this view.</div>";
     panel.innerHTML = `
       <style>
         #${ID} { position:fixed; z-index:2147483647; top:82px; right:16px; width:min(660px,calc(100vw - 32px)); max-height:calc(100vh - 98px); display:flex; flex-direction:column; overflow:hidden; color:#142033; background:#f5f7fb; border:1px solid #9eafc6; border-radius:8px; box-shadow:0 16px 40px rgba(0,23,62,.24); font:13px/1.35 Arial,sans-serif; }
@@ -455,7 +476,8 @@
         #${ID} .search span { color:#58708e; font-weight:700; }
         #${ID} input { width:100%; padding:9px 8px; border:0; outline:0; color:#142033; background:transparent; font:inherit; }
         #${ID} .stats { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:7px; margin-top:10px; }
-        #${ID} .stat { min-width:0; padding:8px 9px; background:#fff; border:1px solid #d5dfeb; border-radius:6px; box-shadow:0 1px 2px rgba(0,23,62,.03); }
+        #${ID} button.stat { min-width:0; margin:0; padding:8px 9px; color:#142033; background:#fff; border:1px solid #d5dfeb; border-radius:6px; box-shadow:0 1px 2px rgba(0,23,62,.03); text-align:left; }
+        #${ID} button.stat:hover, #${ID} button.stat.active { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset; }
         #${ID} .stat b { display:block; color:#102e55; font-size:16px; font-variant-numeric:tabular-nums; }
         #${ID} .stat span { display:block; margin-top:1px; color:#61738a; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         #${ID} .filters { display:flex; align-items:center; gap:2px; margin-top:10px; }
@@ -480,6 +502,11 @@
         #${ID} .card.selected { color:#fff; border-color:#0a5da9; background:#0a5da9; }
         #${ID} .card.added { color:#789; border-color:#d8e1eb; background:#f5f7fa; cursor:default; text-decoration:line-through; }
         #${ID} .empty { padding:30px 16px; color:#64748b; text-align:center; }
+        #${ID} .card-summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 14px; width:100%; margin:0; padding:12px; color:#142033; background:#fff; border:1px solid #d7e0ec; border-radius:7px; box-shadow:0 1px 2px rgba(0,23,62,.04); text-align:left; }
+        #${ID} .card-summary:hover { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset; }
+        #${ID} .card-summary-name { min-width:0; font-size:13px; font-weight:700; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+        #${ID} .card-summary-count { color:#0b2f60; font-size:12px; font-variant-numeric:tabular-nums; text-align:right; }
+        #${ID} .card-summary-meta { grid-column:1/-1; color:#71839a; font-size:11px; }
         #${ID} details { margin:0 16px 14px; border-top:1px solid #d6e0ed; }
         #${ID} summary { padding:9px 0; color:#5e7088; font-size:11px; font-weight:700; cursor:pointer; }
         #${ID} .logs { max-height:110px; overflow:auto; margin-bottom:10px; padding:8px; border-radius:5px; background:#102746; color:#d9eafb; white-space:pre-wrap; font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; }
@@ -496,22 +523,11 @@
           <button class="danger" data-stop ${scanInProgress || addInProgress ? "" : "disabled"}>Stop</button>
           </div>
           <label class="search"><span>Search</span><input data-search placeholder="Search scanned offers" value="${escapeHtml(searchTerm)}"></label>
-          <div class="stats"><div class="stat"><b>${snapshot.cards.length}</b><span>Cards</span></div><div class="stat"><b>${snapshot.offers.length}</b><span>Unique offers</span></div><div class="stat"><b>${addablePlacements}</b><span>Addable cards</span></div><div class="stat"><b>${addedPlacements}</b><span>Added cards</span></div><div class="stat"><b>${selected}</b><span>Selected</span></div></div>
+          <div class="stats"><button class="stat ${cardSummaryMode ? "active" : ""}" data-stat="cards"><b>${snapshot.cards.length}</b><span>Cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "all" ? "active" : ""}" data-stat="all"><b>${snapshot.offers.length}</b><span>Unique offers</span></button><button class="stat ${!cardSummaryMode && viewFilter === "addable" ? "active" : ""}" data-stat="addable"><b>${addablePlacements}</b><span>Addable cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "added" ? "active" : ""}" data-stat="added"><b>${addedPlacements}</b><span>Added cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "selected" ? "active" : ""}" data-stat="selected"><b>${selected}</b><span>Selected</span></button></div>
           <div class="filters"><button class="filter ${viewFilter === "all" ? "active" : ""}" data-filter="all">All ${snapshot.offers.length}</button><button class="filter ${viewFilter === "addable" ? "active" : ""}" data-filter="addable">Addable ${addableOffers}</button><button class="filter ${viewFilter === "added" ? "active" : ""}" data-filter="added">Added ${addedOffers}</button></div>
           <div class="card-scope"><span class="scope-label">Card</span><button class="scope ${!cardFilter ? "active" : ""}" data-card-filter="">All cards</button>${snapshot.cards.map((card) => `<button class="scope ${cardFilter === card.id ? "active" : ""}" data-card-filter="${card.id}">${escapeHtml(card.name)} · ${countCardOffers(card.id)}</button>`).join("")}</div>
         </div>
-        <section class="list">${offers.map((offer) => {
-          const addable = Object.values(offer.cards).filter((status) => status === "addable").length;
-          const added = Object.values(offer.cards).filter((status) => status === "added").length;
-          const visibleOn = Object.keys(offer.cards).length;
-          const selectedRow = (snapshot.selected[offer.key] || []).length > 0;
-          return `<article class="offer ${selectedRow ? "selected-row" : ""}"><div class="offer-head"><div class="offer-main"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="offer-meta">${visibleOn}/${snapshot.cards.length} cards · ${added ? `${added} added` : "Choose cards below"}</div></div><div class="offer-count">${addable}<span>addable</span></div></div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
-            const status = offer.cards[card.id];
-            const isSelected = (snapshot.selected[offer.key] || []).includes(card.id);
-            const classes = `card ${status === "added" ? "added" : isSelected ? "selected" : ""}`;
-            return `<button class="${classes}" data-toggle="${escapeHtml(encodeURIComponent(offer.key))}" data-card="${card.id}" ${status === "added" ? "disabled" : ""}>${escapeHtml(card.name)}</button>`;
-          }).join("")}</div></article>`;
-        }).join("") || "<div class=\"empty\">Run Scan all cards to build your offer list.</div>"}</section>
+        <section class="list">${listContent}</section>
         <details><summary>Scan log · ${date}</summary><div class="logs">${escapeHtml((snapshot.logs || []).join("\n"))}</div></details>
       </main>`;
 
@@ -523,6 +539,19 @@
     panel.querySelector("[data-search]")?.addEventListener("input", (event) => { searchTerm = event.target.value; render(); });
     panel.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => { viewFilter = button.dataset.filter; render(); }));
     panel.querySelectorAll("[data-card-filter]").forEach((button) => button.addEventListener("click", () => { cardFilter = button.dataset.cardFilter; render(); }));
+    panel.querySelectorAll("[data-stat]").forEach((button) => button.addEventListener("click", () => {
+      const stat = button.dataset.stat;
+      cardSummaryMode = stat === "cards";
+      if (stat !== "cards") viewFilter = stat;
+      if (stat === "all" || stat === "cards") cardFilter = "";
+      render();
+    }));
+    panel.querySelectorAll("[data-card-summary]").forEach((button) => button.addEventListener("click", () => {
+      cardSummaryMode = false;
+      cardFilter = button.dataset.cardSummary;
+      viewFilter = "all";
+      render();
+    }));
     panel.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
       toggleSelection(decodeURIComponent(button.dataset.toggle), button.dataset.card);
     }));

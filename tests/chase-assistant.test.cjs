@@ -63,3 +63,10 @@ test('card transitions wait for the prior offer grid to detach before scanning',
   assert.match(source, /previousTiles\.every\(\(tile\) => !tile\.isConnected\)/);
   assert.match(source, /previousGridRemoved/);
 });
+
+test('summary statistics provide clickable views for cards and offer states', () => {
+  assert.match(source, /data-stat="cards"/);
+  assert.match(source, /data-stat="selected"/);
+  assert.match(source, /data-card-summary/);
+  assert.match(source, /viewFilter === "selected"/);
+});
