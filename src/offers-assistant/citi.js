@@ -124,6 +124,7 @@ function createCitiAdapter(env) {
       if (!visible(node)) return false;
       const values = [text(node), node.getAttribute("aria-label") || ""];
       return values.some(value => /^(?:offer )?(?:enrolled|activated|added to card)(?:\s+successfully)?[.!]?$/i.test(value.trim())
+        || /^enrolled\s+in\s+.+[.!]?$/i.test(value.trim())
         || /^(?:successfully enrolled|you(?:'re| are) enrolled)(?:\s+in (?:this |the )?offer)?[.!]?$/i.test(value.trim()));
     });
   }

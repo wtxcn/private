@@ -107,7 +107,7 @@ for (const bank of ['citi', 'usbank']) {
   });
 }
 const picker = '<select id="card-selector-cds-dropdown"><option value="a">Test Card A - 1111</option><option value="b">Test Card B - 2222</option><option value="c">Test ATM Card - 3333</option></select>';
-const citiTile = (name, status = 'addable', reward = '10% cash back') => `<cds-tile><h3>${name}</h3><p>${reward}</p>${status === 'addable' ? `<button id="${name}-Shopping-oneclick" aria-label="Enroll in Offer for ${name}">+</button>` : '<span>Enrolled</span>'}</cds-tile>`;
+const citiTile = (name, status = 'addable', reward = '10% cash back') => `<cds-tile><h3>${name}</h3><p>${reward}</p>${status === 'addable' ? `<button id="${name}-Shopping-oneclick" aria-label="Enroll in Offer for ${name}">+</button>` : `<span>Enrolled in ${name}</span>`}</cds-tile>`;
 test('Citi: stable selection, merchant identities, positive enrollment signal, single native click', async () => {
   const { dom, api, w } = setup('citi', picker + citiTile('Merchant A') + citiTile('Merchant B', 'added'));
   const card = api.adapter.currentCard();
