@@ -106,13 +106,15 @@ for (const bank of ['citi', 'usbank']) {
     dom.window.close();
   });
 }
-const picker = '<select id="card-selector-cds-dropdown"><option value="a">Test Card (...1111)</option><option value="b">Test Card (...2222)</option></select>';
+const picker = '<select id="card-selector-cds-dropdown"><option value="a">Test Card A - 1111</option><option value="b">Test Card B - 2222</option><option value="c">Test ATM Card - 3333</option></select>';
 const citiTile = (name, status = 'addable', reward = '10% cash back') => `<cds-tile><h3>${name}</h3><p>${reward}</p>${status === 'addable' ? `<button id="${name}-Shopping-oneclick" aria-label="Enroll in Offer for ${name}">+</button>` : '<span>Enrolled</span>'}</cds-tile>`;
 test('Citi: stable selection, merchant identities, positive enrollment signal, single native click', async () => {
   const { dom, api, w } = setup('citi', picker + citiTile('Merchant A') + citiTile('Merchant B', 'added'));
   const card = api.adapter.currentCard();
   assert.equal(card.id, 'card:a');
-  assert.equal((await api.adapter.discoverCards()).length, 2);
+  assert.equal((await api.adapter.discoverCards()).length, 3);
+  assert.ok(api.adapter.cardFromName('Legacy Test Card (...4444)'));
+  assert.equal(api.adapter.cardFromName('Selected card'), null);
   const rows = api.adapter.readOffers();
   assert.equal(rows.length, 2);
   assert.equal(rows[0].status, 'addable');

@@ -12,7 +12,8 @@ function createCitiAdapter(env) {
   function cardFromName(name, value = "") {
     const normalized = name.replace(/\s+/g, " ").trim();
     // Refuse generic "selected card" identities: they would merge different cards.
-    if (!/(?:\*|\u2022|\.\.|ending|\d{4}\s*\))[^a-z]*\d{4}|\d{4}\s*\)|ending(?: in)?\s*\d{4}/i.test(normalized)) return null;
+    const lastFour = normalized.match(/(?:ending(?:\s+(?:in|with))?\s*|(?:\*|\u2022|\.){2,}\s*|[-\u2013\u2014]\s*|\(\s*)(\d(?:\s*\d){3})\s*\)?$/i)?.[1]?.replace(/\s/g, "");
+    if (!lastFour) return null;
     return { id: value ? `card:${value}` : `card:${normalize(normalized)}`, name: normalized };
   }
   function currentCard() {

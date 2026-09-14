@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Citi Offers Assistant
 // @namespace    https://online.citi.com/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Scan and select offers locally. Enrollment starts only when you click Add selected.
 // @match        https://online.citi.com/US/nga/products-offers/merchantoffers*
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/CitiOffersAssistant.user.js
@@ -424,7 +424,8 @@ function createCitiAdapter(env) {
   function cardFromName(name, value = "") {
     const normalized = name.replace(/\s+/g, " ").trim();
     // Refuse generic "selected card" identities: they would merge different cards.
-    if (!/(?:\*|\u2022|\.\.|ending|\d{4}\s*\))[^a-z]*\d{4}|\d{4}\s*\)|ending(?: in)?\s*\d{4}/i.test(normalized)) return null;
+    const lastFour = normalized.match(/(?:ending(?:\s+(?:in|with))?\s*|(?:\*|\u2022|\.){2,}\s*|[-\u2013\u2014]\s*|\(\s*)(\d(?:\s*\d){3})\s*\)?$/i)?.[1]?.replace(/\s/g, "");
+    if (!lastFour) return null;
     return { id: value ? `card:${value}` : `card:${normalize(normalized)}`, name: normalized };
   }
   function currentCard() {
@@ -593,5 +594,5 @@ function createCitiAdapter(env) {
   return { assertPage, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readTile, cardFromName, hasAddedSignal };
 }
 
-createOffersAssistant({"file":"CitiOffersAssistant.user.js","adapter":"citi","factory":"createCitiAdapter","id":"citi-offers-assistant","name":"Citi Offers Assistant","version":"0.1.2","namespace":"https://online.citi.com/","match":"https://online.citi.com/US/nga/products-offers/merchantoffers*","accent":"#0874cf","legacyStore":"citiOfferClickerState.v1","legacyPanel":"citi-offer-clicker","cardMode":true,"scopePlural":"cards","allLabel":"All cards","scanLabel":"Scan all cards","icons":{"card":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"/><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"/></svg>","search":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>","collapse":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg>","trash":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>"}}, createCitiAdapter);
+createOffersAssistant({"file":"CitiOffersAssistant.user.js","adapter":"citi","factory":"createCitiAdapter","id":"citi-offers-assistant","name":"Citi Offers Assistant","version":"0.1.3","namespace":"https://online.citi.com/","match":"https://online.citi.com/US/nga/products-offers/merchantoffers*","accent":"#0874cf","legacyStore":"citiOfferClickerState.v1","legacyPanel":"citi-offer-clicker","cardMode":true,"scopePlural":"cards","allLabel":"All cards","scanLabel":"Scan all cards","icons":{"card":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"/><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"/></svg>","search":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>","collapse":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg>","trash":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>"}}, createCitiAdapter);
 })();
