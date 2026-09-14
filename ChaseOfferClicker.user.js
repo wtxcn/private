@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Native Offer Clicker - Refresh Safe
 // @namespace    https://www.chase.com/
-// @version      0.2.2
+// @version      0.2.3
 // @description  Adds Chase Offers by clicking native Chase offer tiles slowly, with all-card queue support.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -14,11 +14,13 @@
 (function () {
   "use strict";
 
-  const VERSION = "0.2.2";
-  const STORE_KEY = "chaseOfferClickerState.v1";
+  const VERSION = "0.2.3";
+  const STORE_KEY = "chaseOfferClickerState.v2";
   const LOG_KEY = "chaseOfferClickerLogs.v1";
   const KEEP_ALIVE_KEY = "chaseOfferClickerKeepAlive.v1";
-  const ACCOUNT_IDS_KEY = "chaseOfferClickerAccountIds.v1";
+  const ACCOUNT_IDS_KEY = "chaseOfferClickerAccountIds.v2";
+  const RESUME_KEY = "chaseOfferClickerResume.v1";
+  const RESUME_TTL_MS = 45000;
 
   let panel;
   let abortRequested = false;
@@ -32,7 +34,13 @@
     updatedAt: 0
   };
 
-  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  const sleep = (ms) => new Promise((resolve, reject) => setTimeout(() => {
+    if (processInFlight && (abortRequested || !getState().active)) {
+      const error = new Error("Run cancelled");
+      error.name = "AbortError";
+      reject(error);
+    } else resolve();
+  }, ms));
 
   function loadJson(key, fallback) {
     try {
@@ -47,12 +55,31 @@
   }
 
   function getState() {
-    return loadJson(STORE_KEY, { active: false });
+    try {
+      return JSON.parse(sessionStorage.getItem(STORE_KEY) || "null") || { active: false };
+    } catch (_) {
+      return { active: false };
+    }
   }
 
   function setState(next) {
-    saveJson(STORE_KEY, next);
+    sessionStorage.setItem(STORE_KEY, JSON.stringify({ ...next, updatedAt: Date.now() }));
     scheduleRender();
+  }
+
+  function armResume() {
+    sessionStorage.setItem(RESUME_KEY, JSON.stringify({ expiresAt: Date.now() + RESUME_TTL_MS }));
+  }
+
+  function takeResumePermission() {
+    try {
+      const marker = JSON.parse(sessionStorage.getItem(RESUME_KEY) || "null");
+      sessionStorage.removeItem(RESUME_KEY);
+      return Boolean(marker?.expiresAt > Date.now());
+    } catch (_) {
+      sessionStorage.removeItem(RESUME_KEY);
+      return false;
+    }
   }
 
   function getLogs() {
@@ -86,11 +113,14 @@
   }
 
   function getAccountIds() {
-    return loadJson(ACCOUNT_IDS_KEY, []);
+    try {
+      const ids = JSON.parse(sessionStorage.getItem(ACCOUNT_IDS_KEY) || "[]");
+      return Array.isArray(ids) ? ids : [];
+    } catch (_) { return []; }
   }
 
   function setAccountIds(ids) {
-    saveJson(ACCOUNT_IDS_KEY, Array.from(new Set(ids.filter(Boolean))));
+    sessionStorage.setItem(ACCOUNT_IDS_KEY, JSON.stringify(Array.from(new Set(ids.filter(Boolean)))));
     scheduleRender(true);
   }
 
@@ -183,28 +213,18 @@
   }
 
   function extractAccountIdsFromPage() {
-    const ids = [];
-    const current = getCurrentAccountId();
-    if (current) ids.push(current);
-
-    const html = document.documentElement.innerHTML || "";
-    [
-      /accountId[^0-9]{0,80}(\d{4,})/gi,
-      /accountIdentifier[^0-9]{0,80}(\d{4,})/gi,
-      /accountReferenceId[^0-9]{0,80}(\d{4,})/gi,
-      /accounts-name-link-button-(\d{4,})/gi,
-      /account-tile-navigation-button-requestCardPayment-(\d{4,})/gi,
-      /currentBalance-(\d{4,})-popover-anchor/gi,
-      /five-percent-cashback-link-(\d{4,})-/gi
-    ].forEach((pattern) => {
-      Array.from(html.matchAll(pattern)).forEach((match) => ids.push(match[1]));
-    });
-
-    return Array.from(new Set(ids));
+    // Only current, rendered credit-card controls; never scripts, logs or bank accounts.
+    if (!isOverviewPage()) return [];
+    return Array.from(new Set(Array.from(document.querySelectorAll(
+      '[id^="account-tile-navigation-button-requestCardPayment-"]'
+    )).filter(isVisible).map((node) =>
+      node.id.match(/^account-tile-navigation-button-requestCardPayment-(\d+)$/)?.[1]
+    ).filter(Boolean)));
   }
 
   function scanAccounts() {
     const ids = extractAccountIdsFromPage();
+    setAccountIds(ids);
     if (ids.length > 0) {
       setAccountIds(ids);
       pushLog(`Scanned ${ids.length} account candidate(s): ${ids.map((id) => `...${id.slice(-4)}`).join(", ")}`);
@@ -215,6 +235,7 @@
   }
 
   function startScanCards() {
+    if (processInFlight || getState().active) return;
     abortRequested = false;
     if (!isOverviewPage()) {
       setState({ ...getState(), active: true, phase: "scan-cards-only", startedAt: Date.now() });
@@ -288,6 +309,21 @@
     const pageText = textOf(document.body).slice(0, 2000);
     return /your session timed out|session timed out|sign in to chase|log on to chase|secure message center sign in/i.test(pageText)
       || (/\/logon|\/login/i.test(location.href) && /chase/i.test(location.hostname));
+  }
+
+  function offersUnavailable() {
+    return Array.from(document.querySelectorAll('h1, h2, [role="alert"]'))
+      .filter((node) => !node.closest?.("#chase-offer-clicker") && isVisible(node))
+      .some((node) => /your account is not eligible to access Chase Offers/i.test(textOf(node)));
+  }
+
+  function stopForPageError() {
+    if (!getState().active || abortRequested) return true;
+    if (!offersUnavailable() && !isLoggedOutOrTimedOut()) return false;
+    const phase = offersUnavailable() ? "offers-unavailable" : "timed-out";
+    setState({ ...getState(), active: false, phase });
+    pushLog("Stopped: Chase cannot load offers for this account. Open Offers from Chase overview and start a fresh run.");
+    return true;
   }
 
   function debugScan() {
@@ -385,7 +421,18 @@
   async function waitForPageReady(timeoutMs = 30000) {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      if (getAddButtons().length > 0 || /chase offers|offers/i.test(pageLabel())) return true;
+      if (stopForPageError()) return false;
+      if (getAddButtons().length > 0 || document.querySelector('[data-testid="categoryOffersSectionContainer"]')) return true;
+      await sleep(500);
+    }
+    return false;
+  }
+
+  async function waitForAccounts(timeoutMs = 30000) {
+    const start = Date.now();
+    while (Date.now() - start < timeoutMs) {
+      if (stopForPageError()) return false;
+      if (isOverviewPage() && extractAccountIdsFromPage().length > 0) return true;
       await sleep(500);
     }
     return false;
@@ -395,8 +442,9 @@
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
       const current = getCurrentAccountId();
-      const accountMatches = !accountId || !current || current === String(accountId);
-      if (isOffersHubPage() && accountMatches && (getAddButtons().length > 0 || /offers/i.test(pageLabel()))) return true;
+      if (stopForPageError()) return false;
+      const accountMatches = !accountId || current === String(accountId);
+      if (isOffersHubPage() && accountMatches && (getAddButtons().length > 0 || document.querySelector('[data-testid="categoryOffersSectionContainer"]'))) return true;
       await sleep(500);
     }
     return false;
@@ -404,10 +452,11 @@
 
   function runActiveProcess(delayMs = 1000) {
     window.setTimeout(() => {
-      if (processInFlight) return;
+      if (processInFlight || abortRequested || !getState().active) return;
       processInFlight = true;
       resumeAfterRefresh()
         .catch((error) => {
+          if (error.name === "AbortError" || abortRequested || !getState().active) return;
           pushLog(`Error: ${error.message}`);
           setState({ ...getState(), active: false, phase: "error" });
         })
@@ -423,11 +472,12 @@
   }
 
   function navigateToAccountHub(accountId, nextState = {}) {
-    if (!accountId) return false;
+    if (!accountId || abortRequested || !getState().active) return false;
     const url = offerHubUrl(accountId);
     setState({ ...getState(), ...nextState, accountId, hubUrl: url, phase: nextState.phase || "navigate-hub" });
     if (location.href !== url) {
       pushLog(`Opening Offers Hub for account ...${accountId.slice(-4)}.`);
+      armResume();
       location.assign(url);
       return true;
     }
@@ -435,16 +485,18 @@
   }
 
   function ensureOnHubForState(state) {
+    if (stopForPageError()) return false;
     const accountId = currentQueueAccount(state);
     if (!accountId) return false;
     if (!isOffersHubPage() || getCurrentAccountId() !== accountId || !/offerCategoryName=ALL/i.test(location.href)) {
-      navigateToAccountHub(accountId, { ...state, phase: "process" });
+      navigateToAccountHub(accountId, state);
       return false;
     }
     return true;
   }
 
   async function clickOneOffer(delayMs) {
+    if (stopForPageError()) return false;
     const buttons = getAddButtons();
     const button = buttons[0];
     if (!button) return false;
@@ -454,12 +506,15 @@
     const hubAccountId = getCurrentAccountId();
     button.scrollIntoView({ block: "center", inline: "nearest" });
     await sleep(400);
+    if (stopForPageError()) return false;
     button.click();
     pushLog(`Clicked: ${name}`);
     await sleep(delayMs);
+    if (stopForPageError()) return false;
 
     if (hubUrl && location.href !== hubUrl) {
       pushLog("Returned to Offers Hub after Chase opened the offer detail page.");
+      armResume();
       location.assign(hubUrl);
       const ready = await waitForHubReady(hubAccountId, 30000);
       if (!ready) {
@@ -497,7 +552,15 @@
     const state = getState();
     if (!state.active) return;
 
-    await waitForPageReady();
+    if (stopForPageError()) return;
+    if (!ensureOnHubForState(state)) return;
+    if (!await waitForHubReady(currentQueueAccount(state))) {
+      if (getState().active) {
+        setState({ ...getState(), active: false, phase: "load-timeout" });
+        pushLog("Offers did not finish loading. Stopped without refreshing or advancing the queue.");
+      }
+      return;
+    }
 
     if (isLoggedOutOrTimedOut()) {
       pushLog("Chase session is logged out or timed out. Sign in, open Chase Offers, then run again.");
@@ -515,12 +578,14 @@
     pushLog(`Start pass: account ...${String(currentQueueAccount(state)).slice(-4)} | addable=${getAddButtons().length}`);
 
     while (!abortRequested && totalClicked < maxClicks && noMoreRounds < 3) {
+      if (stopForPageError()) return;
       const clicked = await clickLoadedOffers(delayMs, maxClicks - totalClicked);
       totalClicked += clicked;
 
       if (!isOffersHubPage()) return;
 
       const moved = await scrollForMore();
+      if (stopForPageError()) return;
       const addable = getAddButtons().length;
       pushLog(`Pass progress: clicked=${totalClicked}, addable=${addable}`);
 
@@ -535,11 +600,13 @@
     }
 
     pushLog(`Clicked ${totalClicked} offer(s) for account ...${String(currentQueueAccount(state)).slice(-4)}. Reloading to verify.`);
-    setState({ ...state, phase: "verify-after-refresh", accountId: currentQueueAccount(state) });
+    setState({ ...state, phase: "verify-after-refresh", accountId: currentQueueAccount(state), resumeUntil: Date.now() + 60000 });
+    armResume();
     location.reload();
   }
 
   function finishCurrentAccount(state, reason) {
+    if (stopForPageError()) return;
     const queue = Array.isArray(state.accountIds) ? state.accountIds : [];
     const accountId = currentQueueAccount(state);
     if (reason) pushLog(reason);
@@ -549,6 +616,7 @@
       const nextAccountId = queue[nextIndex];
       pushLog(`Moving to next account ${nextIndex + 1}/${queue.length}: ...${nextAccountId.slice(-4)}.`);
       setState({ ...state, phase: "process", queueIndex: nextIndex, accountId: nextAccountId });
+      armResume();
       location.assign(offerHubUrl(nextAccountId));
       return;
     }
@@ -562,19 +630,17 @@
     if (!state.active) return;
 
     if (state.phase === "scan-cards-only") {
-      await sleep(2500);
+      await waitForAccounts();
+      if (stopForPageError()) return;
       const ids = scanAccounts();
       setState({ ...state, active: false, phase: ids.length > 0 ? "scan-complete" : "scan-no-accounts" });
       return;
     }
 
     if (state.phase === "scan-accounts") {
-      await sleep(2000);
-      let accountIds = scanAccounts();
-      if (accountIds.length <= 1) {
-        const cached = getAccountIds();
-        if (cached.length > accountIds.length) accountIds = cached;
-      }
+      await waitForAccounts();
+      if (stopForPageError()) return;
+      const accountIds = scanAccounts();
 
       if (accountIds.length === 0) {
         pushLog("No accounts found on overview. Stopping.");
@@ -584,17 +650,21 @@
 
       pushLog(`Starting queue after scan: ${accountIds.length} account candidate(s).`);
       setState({ ...state, phase: "process", allCards: true, accountIds, queueIndex: 0, accountId: accountIds[0], hubUrl: offerHubUrl(accountIds[0]) });
+      armResume();
       location.assign(offerHubUrl(accountIds[0]));
       return;
     }
 
-    await waitForPageReady();
-
     if (!ensureOnHubForState(state)) return;
 
     if (state.phase === "verify-after-refresh") {
+      if (!await waitForHubReady(currentQueueAccount(state))) {
+        if (getState().active) setState({ ...getState(), active: false, phase: "load-timeout" });
+        return;
+      }
       window.scrollTo(0, 0);
       await sleep(1500);
+      if (stopForPageError()) return;
       const addable = getAddButtons().length;
       if (addable > 0) {
         pushLog(`Refresh found ${addable} more offer(s), continuing.`);
@@ -611,12 +681,15 @@
   }
 
   function startRun(options = {}) {
+    if (processInFlight || getState().active) {
+      pushLog("A run is still active or stopping. Wait for it to stop before starting again.");
+      return;
+    }
     abortRequested = false;
     let accountIds = [];
     if (options.allCards) {
-      accountIds = getAccountIds();
-      if (accountIds.length === 0) accountIds = scanAccounts();
-      if (accountIds.length <= 1 && !isOverviewPage()) {
+      setAccountIds([]);
+      if (!isOverviewPage() || extractAccountIdsFromPage().length === 0) {
         setState({
           active: true,
           phase: "scan-accounts",
@@ -628,14 +701,17 @@
           startedAt: Date.now()
         });
         pushLog("Opening overview to scan all card account IDs.");
+        armResume();
         location.assign("https://secure.chase.com/web/auth/dashboard#/dashboard/overview");
+        runActiveProcess(1500);
         return;
       }
+      accountIds = scanAccounts();
     }
 
     const accountId = options.allCards
       ? accountIds[0]
-      : getCurrentAccountId() || currentQueueAccount(getState());
+      : getCurrentAccountId();
 
     if (!accountId) {
       pushLog("No accountId found. Open Chase Offers or account overview, then scan cards.");
@@ -656,6 +732,7 @@
     });
     pushLog(options.allCards ? `Starting Chase Offers run for ${accountIds.length} account candidate(s).` : "Starting Chase Offers run for current account.");
     if (!isOffersHubPage() || getCurrentAccountId() !== accountId || !/offerCategoryName=ALL/i.test(location.href)) {
+      armResume();
       location.assign(offerHubUrl(accountId));
       return;
     }
@@ -664,6 +741,7 @@
 
   function stopRun() {
     abortRequested = true;
+    sessionStorage.removeItem(RESUME_KEY);
     const state = getState();
     setState({ ...state, active: false, phase: "stopped" });
     pushLog("Stop requested.");
@@ -882,8 +960,14 @@
     });
 
     const state = getState();
-    if (state.active) {
-      pushLog("Resuming saved run after navigation/refresh.");
+    const mayResume = takeResumePermission();
+    if (state.active && !mayResume) {
+      setState({ ...state, active: false, phase: "idle" });
+      pushLog("Saved run cleared. Click Start to add offers.");
+      return;
+    }
+    if (state.active && mayResume) {
+      pushLog("Continuing the run after a script navigation.");
       runActiveProcess(2500);
     }
   }
