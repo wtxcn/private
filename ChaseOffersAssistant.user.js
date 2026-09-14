@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.6
+// @version      0.1.7
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -426,7 +426,7 @@
     return element;
   }
 
-  function render() {
+  function render(restoreSearchFocus = false) {
     if (!panel) return;
     const offers = filteredOffers();
     const mode = scanInProgress ? "Scanning" : addInProgress ? "Adding" : "Ready";
@@ -536,7 +536,8 @@
     panel.querySelector("[data-clear]")?.addEventListener("click", clearSelection);
     panel.querySelector("[data-add]")?.addEventListener("click", addSelectedOffers);
     panel.querySelector("[data-stop]")?.addEventListener("click", stopCurrentRun);
-    panel.querySelector("[data-search]")?.addEventListener("input", (event) => { searchTerm = event.target.value; render(); });
+    const searchInput = panel.querySelector("[data-search]");
+    searchInput?.addEventListener("input", (event) => { searchTerm = event.target.value; render(true); });
     panel.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => { viewFilter = button.dataset.filter; render(); }));
     panel.querySelectorAll("[data-card-filter]").forEach((button) => button.addEventListener("click", () => { cardFilter = button.dataset.cardFilter; render(); }));
     panel.querySelectorAll("[data-stat]").forEach((button) => button.addEventListener("click", () => {
@@ -552,6 +553,10 @@
       viewFilter = "all";
       render();
     }));
+    if (restoreSearchFocus && searchInput) {
+      searchInput.focus();
+      searchInput.setSelectionRange(searchTerm.length, searchTerm.length);
+    }
     panel.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
       toggleSelection(decodeURIComponent(button.dataset.toggle), button.dataset.card);
     }));

@@ -70,3 +70,9 @@ test('summary statistics provide clickable views for cards and offer states', ()
   assert.match(source, /data-card-summary/);
   assert.match(source, /viewFilter === "selected"/);
 });
+
+test('live search restores focus after rebuilding filtered offer rows', () => {
+  assert.match(source, /function render\(restoreSearchFocus = false\)/);
+  assert.match(source, /render\(true\)/);
+  assert.match(source, /searchInput\.setSelectionRange\(searchTerm\.length, searchTerm\.length\)/);
+});
