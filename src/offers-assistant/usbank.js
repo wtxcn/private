@@ -15,11 +15,11 @@ function createUSBankAdapter(env) {
   }
   function detailFromControl(control) {
     if (!control || !visible(control)) return null;
-    const known = control.closest(`${MODAL}, [role="dialog"], [aria-modal="true"]`);
-    if (known && visible(known)) return known;
     const ownerDocument = control.ownerDocument;
     let node = control.parentElement;
     while (node && node !== ownerDocument.body && node !== ownerDocument.documentElement) {
+      // OfferHub can nest the action in a small usb-modal-v2 element while the
+      // heading and Close action live in a larger wrapper. Require both.
       if (visible(node) && node.querySelector("h1, h2, h3") && node.querySelector("#close-action, #vicinity-overlay-click-modal--close")) return node;
       node = node.parentElement;
     }

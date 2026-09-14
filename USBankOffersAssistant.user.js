@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         U.S. Bank Offers Assistant
 // @namespace    https://onlinebanking.usbank.com/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Scan and select offers locally. Enrollment starts only when you click Add selected.
 // @match        https://onlinebanking.usbank.com/digital/*
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/USBankOffersAssistant.user.js
@@ -422,11 +422,11 @@ function createUSBankAdapter(env) {
   }
   function detailFromControl(control) {
     if (!control || !visible(control)) return null;
-    const known = control.closest(`${MODAL}, [role="dialog"], [aria-modal="true"]`);
-    if (known && visible(known)) return known;
     const ownerDocument = control.ownerDocument;
     let node = control.parentElement;
     while (node && node !== ownerDocument.body && node !== ownerDocument.documentElement) {
+      // OfferHub can nest the action in a small usb-modal-v2 element while the
+      // heading and Close action live in a larger wrapper. Require both.
       if (visible(node) && node.querySelector("h1, h2, h3") && node.querySelector("#close-action, #vicinity-overlay-click-modal--close")) return node;
       node = node.parentElement;
     }
@@ -553,5 +553,5 @@ function createUSBankAdapter(env) {
   return { assertPage, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
 }
 
-createOffersAssistant({"file":"USBankOffersAssistant.user.js","adapter":"usbank","factory":"createUSBankAdapter","id":"usbank-offers-assistant","name":"U.S. Bank Offers Assistant","version":"0.1.2","namespace":"https://onlinebanking.usbank.com/","match":"https://onlinebanking.usbank.com/digital/*","accent":"#b42339","legacyStore":"usBankOfferClickerState.v1","cardMode":false,"scopePlural":"collections","allLabel":"All deals","scanLabel":"Scan deals","icons":{"card":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"/><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"/></svg>","search":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>","collapse":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg>","trash":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>"}}, createUSBankAdapter);
+createOffersAssistant({"file":"USBankOffersAssistant.user.js","adapter":"usbank","factory":"createUSBankAdapter","id":"usbank-offers-assistant","name":"U.S. Bank Offers Assistant","version":"0.1.3","namespace":"https://onlinebanking.usbank.com/","match":"https://onlinebanking.usbank.com/digital/*","accent":"#b42339","legacyStore":"usBankOfferClickerState.v1","cardMode":false,"scopePlural":"collections","allLabel":"All deals","scanLabel":"Scan deals","icons":{"card":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"/><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"/></svg>","search":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>","collapse":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg>","trash":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>"}}, createUSBankAdapter);
 })();

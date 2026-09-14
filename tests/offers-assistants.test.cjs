@@ -180,7 +180,7 @@ test('US Bank: current OfferHub detail controls identify addable and activated d
   const { dom, api, w } = setup('usbank');
   const overlay = w.document.createElement('section');
   overlay.className = 'offerhub-overlay';
-  overlay.innerHTML = '<div><h1>Merchant A</h1><button id="activate-offer">Activate</button><button id="close-action">Close</button></div>';
+  overlay.innerHTML = '<h1>Merchant A</h1><div class="usb-modal-v2"><button id="activate-offer">Activate</button></div><button id="close-action">Close</button>';
   w.document.body.appendChild(overlay);
   assert.equal(api.adapter.activateButton(api.adapter.modal()), overlay.querySelector('#activate-offer'));
   assert.equal(api.adapter.activated(api.adapter.modal()), false);
