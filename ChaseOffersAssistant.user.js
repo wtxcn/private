@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.9
+// @version      0.1.10
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -519,7 +519,7 @@
         #${ID} .offer-logo { display:block; width:100%; height:100%; object-fit:contain; }
         #${ID} .offer-logo.fallback { display:grid; width:42px; height:42px; place-items:center; border-radius:9px; color:#2767a3; background:#e9f2fb; font-size:12px; font-weight:800; }
         #${ID} .offer-main { flex:1; min-width:0; }
-        #${ID} .offer-name { color:#17254a; font-size:15px; font-weight:800; line-height:1.25; overflow-wrap:anywhere; }
+        #${ID} .offer-name { color:#071f52; font-size:17px; font-weight:800; line-height:1.24; overflow-wrap:anywhere; }
         #${ID} .offer-meta { margin-top:3px; color:#9099a8; font-size:12px; }
         #${ID} .offer-meta.complete { color:#61ae85; font-weight:700; }
         #${ID} .offer-count { min-width:66px; color:#071f52; font-size:13px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums; }
@@ -528,7 +528,7 @@
         #${ID} .cards { display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
         #${ID} .card { margin:0; padding:5px 7px; border-color:#e1e5eb; background:#fff; color:#687387; font-size:11px; font-weight:600; }
         #${ID} .card.selected { color:#fff; border-color:#0a2b63; background:#0a2b63; }
-        #${ID} .card.added { color:#7d8797; border-color:#e2e6ec; background:#f7f8fa; cursor:default; text-decoration:line-through; }
+        #${ID} .card.added { color:#28784f; border-color:#76c59a; background:#eaf7ef; box-shadow:inset 0 0 0 1px rgba(57,151,97,.12); cursor:default; font-weight:700; opacity:1; text-decoration:none; }
         #${ID} .empty { padding:30px 16px; color:#64748b; text-align:center; }
         #${ID} .card-summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 14px; width:100%; margin:0; padding:12px; color:#142033; background:#fff; border:1px solid #d7e0ec; border-radius:7px; box-shadow:0 1px 2px rgba(0,23,62,.04); text-align:left; }
         #${ID} .card-summary:hover { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset; }
