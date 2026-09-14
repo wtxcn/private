@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.7
+// @version      0.1.9
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -107,6 +107,10 @@
     return offerTitleText(value);
   }
 
+  function offerInitials(name) {
+    return String(name || "?").replace(/[^a-z0-9]/ig, "").slice(0, 2).toUpperCase() || "?";
+  }
+
   function offerHubUrl(accountId) {
     return `https://secure.chase.com/web/auth/dashboard#/dashboard/merchantOffers/offerCategoriesPage?accountId=${encodeURIComponent(accountId)}&offerCategoryName=ALL`;
   }
@@ -164,7 +168,13 @@
       const name = displayOfferName(label);
       const key = normalizeOfferName(name);
       if (!key || key.length < 3) continue;
-      offers.push({ key, name, status: /success added/i.test(label) ? "added" : "addable" });
+      const image = tile.querySelector("img");
+      offers.push({
+        key,
+        name,
+        status: /success added/i.test(label) ? "added" : "addable",
+        imageUrl: image?.currentSrc || image?.getAttribute?.("src") || ""
+      });
     }
     return offers;
   }
@@ -180,6 +190,7 @@
     for (const item of cardOffers) {
       const offer = offers.get(item.key) || { key: item.key, name: item.name, cards: {} };
       offer.name = offer.name.length >= item.name.length ? offer.name : item.name;
+      if (item.imageUrl) offer.imageUrl = item.imageUrl;
       offer.cards[card.id] = item.status;
       offers.set(item.key, offer);
     }
@@ -448,7 +459,12 @@
         const added = Object.values(offer.cards).filter((status) => status === "added").length;
         const visibleOn = Object.keys(offer.cards).length;
         const selectedRow = (snapshot.selected[offer.key] || []).length > 0;
-        return `<article class="offer ${selectedRow ? "selected-row" : ""}"><div class="offer-head"><div class="offer-main"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="offer-meta">${visibleOn}/${snapshot.cards.length} cards · ${added ? `${added} added` : "Choose cards below"}</div></div><div class="offer-count">${addable}<span>addable</span></div></div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
+        const isComplete = addable === 0 && added > 0;
+        const logo = offer.imageUrl
+          ? `<img class="offer-logo" src="${escapeHtml(offer.imageUrl)}" alt="">`
+          : `<span class="offer-logo fallback">${offerInitials(offer.name)}</span>`;
+        const meta = isComplete ? `Added to ${added}/${snapshot.cards.length} cards` : `${visibleOn}/${snapshot.cards.length} cards · choose eligible cards`;
+        return `<article class="offer ${selectedRow ? "selected-row" : ""}"><div class="offer-head"><div class="offer-logo-wrap">${logo}</div><div class="offer-main"><div class="offer-name">${escapeHtml(offer.name)}</div><div class="offer-meta ${isComplete ? "complete" : ""}">${meta}</div></div><div class="offer-count ${isComplete ? "complete" : ""}">${isComplete ? added : addable}<span>${isComplete ? "added" : "eligible"}</span></div></div><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
           const status = offer.cards[card.id];
           const isSelected = (snapshot.selected[offer.key] || []).includes(card.id);
           const classes = `card ${status === "added" ? "added" : isSelected ? "selected" : ""}`;
@@ -457,50 +473,62 @@
       }).join("") || "<div class=\"empty\">No offers match this view.</div>";
     panel.innerHTML = `
       <style>
-        #${ID} { position:fixed; z-index:2147483647; top:82px; right:16px; width:min(660px,calc(100vw - 32px)); max-height:calc(100vh - 98px); display:flex; flex-direction:column; overflow:hidden; color:#142033; background:#f5f7fb; border:1px solid #9eafc6; border-radius:8px; box-shadow:0 16px 40px rgba(0,23,62,.24); font:13px/1.35 Arial,sans-serif; }
+        #${ID} { position:fixed; z-index:2147483647; top:82px; right:16px; width:min(660px,calc(100vw - 32px)); max-height:calc(100vh - 98px); display:flex; flex-direction:column; overflow:hidden; color:#17254a; background:#f8f9fb; border:1px solid #e4e7ee; border-radius:16px; box-shadow:0 18px 42px rgba(18,39,79,.17); font:14px/1.35 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; letter-spacing:0; }
         #${ID} * { box-sizing:border-box; }
-        #${ID} header { display:flex; align-items:center; justify-content:space-between; padding:13px 16px; color:#fff; background:#0b2f60; border-bottom:3px solid #1677c8; }
-        #${ID} .brand { font-size:15px; font-weight:700; }
-        #${ID} .subbrand { margin-top:1px; color:#bdd4ee; font-size:11px; }
-        #${ID} .run-state { color:#d9eafb; font-size:12px; font-weight:700; }
+        #${ID} header { display:flex; align-items:center; justify-content:space-between; padding:16px 18px; color:#071f52; background:#fff; border-bottom:1px solid #e7e9ee; }
+        #${ID} .brand-wrap { display:flex; align-items:center; gap:11px; min-width:0; }
+        #${ID} .brand-mark { position:relative; display:grid; width:48px; height:48px; place-items:center; flex:none; overflow:hidden; border-radius:12px; background:#0874cf; box-shadow:inset 0 -7px 11px rgba(0,54,128,.16); }
+        #${ID} .brand-card { position:relative; display:block; width:27px; height:19px; border-radius:3px; background:#fff; box-shadow:0 1px 2px rgba(0,49,112,.18); }
+        #${ID} .brand-card::after { position:absolute; top:5px; left:4px; width:19px; height:3px; background:#a7c9ee; content:""; }
+        #${ID} .brand-plus { position:absolute; right:5px; bottom:5px; display:grid; width:15px; height:15px; place-items:center; border:1px solid #dcecff; border-radius:50%; color:#fff; background:#09235c; font-size:13px; font-weight:800; line-height:1; }
+        #${ID} .brand { color:#071f52; font-size:18px; font-weight:800; line-height:1.12; }
+        #${ID} .subbrand { margin-top:3px; color:#798293; font-size:12px; font-weight:500; }
+        #${ID} .run-state { color:#687387; font-size:12px; font-weight:700; }
         #${ID} main { min-height:0; overflow:auto; }
-        #${ID} .controls { position:sticky; top:0; z-index:2; padding:12px 16px 10px; background:#f5f7fb; border-bottom:1px solid #d6e0ed; }
-        #${ID} button { border:1px solid #0a5da9; border-radius:5px; padding:7px 10px; color:#fff; background:#0a5da9; font:600 12px/1.2 Arial,sans-serif; cursor:pointer; }
+        #${ID} .controls { position:sticky; top:0; z-index:2; padding:12px 16px 10px; background:#f8f9fb; border-bottom:1px solid #e7e9ee; }
+        #${ID} button { border:1px solid #0a2b63; border-radius:7px; padding:7px 10px; color:#fff; background:#0a2b63; font:700 12px/1.2 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif; cursor:pointer; }
         #${ID} button + button { margin-left:6px; }
-        #${ID} button.secondary { color:#0a5da9; background:#fff; }
+        #${ID} button.secondary { color:#0a2b63; background:#fff; border-color:#d9dee8; }
         #${ID} button.danger { border-color:#b3261e; background:#b3261e; }
         #${ID} button:disabled { opacity:.55; cursor:not-allowed; }
         #${ID} .actions { display:flex; flex-wrap:wrap; gap:6px; }
         #${ID} .actions button + button { margin-left:0; }
-        #${ID} .search { display:flex; align-items:center; margin-top:10px; padding:0 10px; background:#fff; border:1px solid #b9c9dc; border-radius:5px; box-shadow:0 1px 2px rgba(0,23,62,.04); }
-        #${ID} .search span { color:#58708e; font-weight:700; }
-        #${ID} input { width:100%; padding:9px 8px; border:0; outline:0; color:#142033; background:transparent; font:inherit; }
+        #${ID} .search { display:flex; align-items:center; margin-top:10px; padding:0 14px; background:#fff; border:1px solid #e0e4eb; border-radius:11px; box-shadow:0 1px 2px rgba(25,44,80,.03); }
+        #${ID} .search-icon { position:relative; display:block; width:12px; height:12px; flex:none; border:2px solid #9aa4b5; border-radius:50%; }
+        #${ID} .search-icon::after { position:absolute; right:-5px; bottom:-3px; width:6px; height:2px; border-radius:2px; background:#9aa4b5; content:""; transform:rotate(-45deg); transform-origin:left center; }
+        #${ID} input { width:100%; padding:12px 10px; border:0; outline:0; color:#17254a; background:transparent; font:inherit; }
+        #${ID} input::placeholder { color:#98a1b1; opacity:1; }
         #${ID} .stats { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:7px; margin-top:10px; }
-        #${ID} button.stat { min-width:0; margin:0; padding:8px 9px; color:#142033; background:#fff; border:1px solid #d5dfeb; border-radius:6px; box-shadow:0 1px 2px rgba(0,23,62,.03); text-align:left; }
-        #${ID} button.stat:hover, #${ID} button.stat.active { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset; }
-        #${ID} .stat b { display:block; color:#102e55; font-size:16px; font-variant-numeric:tabular-nums; }
-        #${ID} .stat span { display:block; margin-top:1px; color:#61738a; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+        #${ID} button.stat { min-width:0; margin:0; padding:10px; color:#17254a; background:#fff; border:1px solid #e4e7ed; border-radius:11px; box-shadow:0 1px 2px rgba(25,44,80,.025); text-align:left; }
+        #${ID} button.stat:hover, #${ID} button.stat.active { border-color:#8eadd7; box-shadow:0 0 0 1px #8eadd7 inset; }
+        #${ID} .stat b { display:block; color:#071f52; font-size:18px; font-variant-numeric:tabular-nums; }
+        #${ID} .stat span { display:block; margin-top:2px; color:#7d8798; font-size:10px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
         #${ID} .filters { display:flex; align-items:center; gap:2px; margin-top:10px; }
-        #${ID} .filter { border:0; border-radius:0; padding:6px 9px; color:#52667e; background:transparent; font-weight:700; }
+        #${ID} .filter { border:0; border-radius:0; padding:6px 9px; color:#737d8d; background:transparent; font-weight:700; }
         #${ID} .filter + .filter { margin-left:0; }
-        #${ID} .filter.active { color:#0b2f60; box-shadow:inset 0 -2px 0 #1478c9; }
+        #${ID} .filter.active { color:#071f52; box-shadow:inset 0 -2px 0 #0874cf; }
         #${ID} .card-scope { display:flex; align-items:center; flex-wrap:wrap; gap:5px; margin-top:8px; }
-        #${ID} .scope-label { margin-right:2px; color:#697b91; font-size:10px; font-weight:700; text-transform:uppercase; }
-        #${ID} .scope { margin:0; padding:4px 7px; border-color:#c5d2e0; color:#4a6079; background:#fff; font-size:10px; font-weight:700; }
-        #${ID} .scope.active { color:#fff; border-color:#0a5da9; background:#0a5da9; }
+        #${ID} .scope-label { margin-right:2px; color:#7c8697; font-size:10px; font-weight:700; text-transform:uppercase; }
+        #${ID} .scope { margin:0; padding:4px 7px; border-color:#dde2ea; color:#657083; background:#fff; font-size:10px; font-weight:700; }
+        #${ID} .scope.active { color:#fff; border-color:#0a2b63; background:#0a2b63; }
         #${ID} .list { display:flex; flex-direction:column; gap:7px; padding:10px 16px 14px; }
-        #${ID} .offer { padding:10px 11px; background:#fff; border:1px solid #d7e0ec; border-radius:7px; box-shadow:0 1px 2px rgba(0,23,62,.04); }
-        #${ID} .offer.selected-row { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset,0 1px 2px rgba(0,23,62,.04); }
-        #${ID} .offer-head { display:flex; align-items:flex-start; gap:12px; }
+        #${ID} .offer { padding:14px; background:#fff; border:1px solid #e9ebf0; border-radius:14px; box-shadow:0 3px 10px rgba(30,57,94,.035); }
+        #${ID} .offer.selected-row { border-color:#8eadd7; box-shadow:0 0 0 1px #8eadd7 inset,0 1px 2px rgba(0,23,62,.04); }
+        #${ID} .offer-head { display:flex; align-items:center; gap:12px; }
+        #${ID} .offer-logo-wrap { display:grid; width:64px; height:50px; place-items:center; flex:none; overflow:hidden; }
+        #${ID} .offer-logo { display:block; width:100%; height:100%; object-fit:contain; }
+        #${ID} .offer-logo.fallback { display:grid; width:42px; height:42px; place-items:center; border-radius:9px; color:#2767a3; background:#e9f2fb; font-size:12px; font-weight:800; }
         #${ID} .offer-main { flex:1; min-width:0; }
-        #${ID} .offer-name { color:#142033; font-size:13px; font-weight:700; line-height:1.3; overflow-wrap:anywhere; }
-        #${ID} .offer-meta { margin-top:2px; color:#71839a; font-size:11px; }
-        #${ID} .offer-count { min-width:64px; color:#0b2f60; font-size:12px; font-weight:700; text-align:right; font-variant-numeric:tabular-nums; }
-        #${ID} .offer-count span { display:block; color:#71839a; font-size:10px; font-weight:400; }
+        #${ID} .offer-name { color:#17254a; font-size:15px; font-weight:800; line-height:1.25; overflow-wrap:anywhere; }
+        #${ID} .offer-meta { margin-top:3px; color:#9099a8; font-size:12px; }
+        #${ID} .offer-meta.complete { color:#61ae85; font-weight:700; }
+        #${ID} .offer-count { min-width:66px; color:#071f52; font-size:13px; font-weight:800; text-align:right; font-variant-numeric:tabular-nums; }
+        #${ID} .offer-count.complete { color:#61ae85; }
+        #${ID} .offer-count span { display:block; color:#9aa3b1; font-size:10px; font-weight:600; }
         #${ID} .cards { display:flex; flex-wrap:wrap; gap:5px; margin-top:9px; }
-        #${ID} .card { margin:0; padding:5px 7px; border-color:#b7c8db; background:#fff; color:#40536b; font-size:11px; font-weight:600; }
-        #${ID} .card.selected { color:#fff; border-color:#0a5da9; background:#0a5da9; }
-        #${ID} .card.added { color:#789; border-color:#d8e1eb; background:#f5f7fa; cursor:default; text-decoration:line-through; }
+        #${ID} .card { margin:0; padding:5px 7px; border-color:#e1e5eb; background:#fff; color:#687387; font-size:11px; font-weight:600; }
+        #${ID} .card.selected { color:#fff; border-color:#0a2b63; background:#0a2b63; }
+        #${ID} .card.added { color:#7d8797; border-color:#e2e6ec; background:#f7f8fa; cursor:default; text-decoration:line-through; }
         #${ID} .empty { padding:30px 16px; color:#64748b; text-align:center; }
         #${ID} .card-summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 14px; width:100%; margin:0; padding:12px; color:#142033; background:#fff; border:1px solid #d7e0ec; border-radius:7px; box-shadow:0 1px 2px rgba(0,23,62,.04); text-align:left; }
         #${ID} .card-summary:hover { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset; }
@@ -512,7 +540,7 @@
         #${ID} .logs { max-height:110px; overflow:auto; margin-bottom:10px; padding:8px; border-radius:5px; background:#102746; color:#d9eafb; white-space:pre-wrap; font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; }
         @media (max-width:560px) { #${ID} { right:8px; width:calc(100vw - 16px); } #${ID} .stats { grid-template-columns:repeat(2,minmax(0,1fr)); } #${ID} .actions button { flex:1 1 auto; } }
       </style>
-      <header><div><div class="brand">Chase Offers</div><div class="subbrand">Offer Assistant</div></div><span class="run-state">${mode}</span></header>
+      <header><div class="brand-wrap"><div class="brand-mark" aria-hidden="true"><span class="brand-card"></span><span class="brand-plus">+</span></div><div><div class="brand">Chase Offers</div><div class="subbrand">Offers: ${snapshot.offers.length} · Cards: ${snapshot.cards.length}</div></div></div><span class="run-state">${mode}</span></header>
       <main>
         <div class="controls">
           <div class="actions">
@@ -522,7 +550,7 @@
           <button data-add ${selected && !scanInProgress && !addInProgress ? "" : "disabled"}>Add selected (${selected})</button>
           <button class="danger" data-stop ${scanInProgress || addInProgress ? "" : "disabled"}>Stop</button>
           </div>
-          <label class="search"><span>Search</span><input data-search placeholder="Search scanned offers" value="${escapeHtml(searchTerm)}"></label>
+          <label class="search"><span class="search-icon" aria-hidden="true"></span><input data-search placeholder="Search merchants or offers" value="${escapeHtml(searchTerm)}"></label>
           <div class="stats"><button class="stat ${cardSummaryMode ? "active" : ""}" data-stat="cards"><b>${snapshot.cards.length}</b><span>Cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "all" ? "active" : ""}" data-stat="all"><b>${snapshot.offers.length}</b><span>Unique offers</span></button><button class="stat ${!cardSummaryMode && viewFilter === "addable" ? "active" : ""}" data-stat="addable"><b>${addablePlacements}</b><span>Addable cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "added" ? "active" : ""}" data-stat="added"><b>${addedPlacements}</b><span>Added cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "selected" ? "active" : ""}" data-stat="selected"><b>${selected}</b><span>Selected</span></button></div>
           <div class="filters"><button class="filter ${viewFilter === "all" ? "active" : ""}" data-filter="all">All ${snapshot.offers.length}</button><button class="filter ${viewFilter === "addable" ? "active" : ""}" data-filter="addable">Addable ${addableOffers}</button><button class="filter ${viewFilter === "added" ? "active" : ""}" data-filter="added">Added ${addedOffers}</button></div>
           <div class="card-scope"><span class="scope-label">Card</span><button class="scope ${!cardFilter ? "active" : ""}" data-card-filter="">All cards</button>${snapshot.cards.map((card) => `<button class="scope ${cardFilter === card.id ? "active" : ""}" data-card-filter="${card.id}">${escapeHtml(card.name)} · ${countCardOffers(card.id)}</button>`).join("")}</div>

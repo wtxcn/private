@@ -76,3 +76,17 @@ test('live search restores focus after rebuilding filtered offer rows', () => {
   assert.match(source, /render\(true\)/);
   assert.match(source, /searchInput\.setSelectionRange\(searchTerm\.length, searchTerm\.length\)/);
 });
+
+test('offer scans retain Chase tile imagery for the visual list', () => {
+  assert.match(source, /tile\.querySelector\("img"\)/);
+  assert.match(source, /imageUrl/);
+  assert.match(source, /class="offer-logo/);
+});
+
+test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
+  assert.match(source, /@version\s+0\.1\.9/);
+  assert.match(source, /brand-card/);
+  assert.match(source, /search-icon/);
+  assert.match(source, /-apple-system,BlinkMacSystemFont/);
+  assert.match(source, /offer-meta\.complete \{ color:#61ae85/);
+});
