@@ -4,11 +4,64 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 
 ## Scripts
 
+- `CitiOffersAssistant.user.js`: new selectable-offer assistant for Citi Merchant Offers.
+- `USBankOffersAssistant.user.js`: new selectable-deal assistant for U.S. Bank.
 - `AmexNativeOfferClicker.user.js`: Amex Offers helper.
 - `ChaseOfferClicker.user.js`: Chase Offers helper for the currently loaded Chase Offers page.
 - `CitiOfferClicker.user.js`: Citi Merchant Offers helper.
 - `USBankOfferClicker.user.js`: U.S. Bank cash-back deals helper.
 - `FidelityFullViewRefresher.user.js`: Fidelity Full View helper for refreshing linked institutions.
+
+## New Citi and U.S. Bank Assistants
+
+The new assistants are separate installations, not replacements for the old clickers.
+Disable the matching old clicker before enabling the new assistant. The new assistant
+refuses to start if the old clicker's stored run is active. It never imports or resumes
+an old run. Opening or refreshing a page does not start scanning or enrollment.
+
+Open the bank's offers page, then click Scan. Click an offer's image, heading or empty
+area to select every scanned addable card for that offer. Click again to deselect;
+individual card buttons adjust the selection. Add selected starts the selected queue
+without an extra confirmation dialog. Stop cancels subsequent clicks. Refreshing the
+page stops the queue; rescan and explicitly start a new queue if needed.
+
+The Added view includes only offers confirmed added in every scanned applicable scope.
+Partial offers remain Addable. An uncertain result remains Unverified, not green.
+Disappearance of an enrollment button alone never counts as success. Scanning only
+reads visible offer state, opens details and changes the selected card; it never enrolls.
+The list is a dated snapshot, not an assertion of live account state.
+
+- **Citi:** supports the native card select and linked listbox picker, using the old
+  script's Merchant Offers tile and one-click enroll controls. Card names must be
+  identifiable by masked/ending digits. The scanner waits for a changed, settled grid
+  after switching cards. An unrecognized picker or unchanged grid stops that card's scan.
+  Native category/filter settings and inaccessible frames can limit scan coverage.
+- **U.S. Bank:** uses the old script's Offer from tiles and Activate Offer detail modal.
+  The old script does not expose a per-card picker, so this version manages the visible
+  **Cash-back deals collection**, not an invented card inventory. It cannot claim that
+  every U.S. Bank card has an offer. Scanning opens each deal read-only to inspect its
+  status, then closes its detail before continuing.
+
+The two installable files bundle their UI, adapter and icons without remote libraries.
+Only the matching bank's native controls are used; no private enrollment API is called.
+Offer snapshots stay in that bank origin's localStorage. Selections and queues are in
+memory, and the trash button clears the assistant's cache. No scan or account data is
+sent to GitHub. The configured update URL downloads code from this repository.
+
+### Verification and Development
+
+The automated tests use synthetic card and merchant data. Live authenticated Citi and
+U.S. Bank pages have not yet been verified for this initial release; layout changes may
+require adapter updates. Generated files are built from `src/offers-assistant/`:
+
+```sh
+npm ci
+npm run build
+npm test
+npm run check:build
+```
+
+Do not commit bank screenshots, account snapshots, cookies or real card identifiers.
 
 ## Why this script exists
 
