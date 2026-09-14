@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.2
+// @version      0.1.3
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -16,6 +16,8 @@
 
   const ID = "chase-offers-assistant";
   const SNAPSHOT_KEY = "chaseOffersAssistantSnapshot.v1";
+  const ADD_RUN_KEY = "chaseOffersAssistantAddRun.v1";
+  const ADD_RUN_TTL_MS = 120000;
   const OVERVIEW_URL = "https://secure.chase.com/web/auth/dashboard#/dashboard/overview";
   const WAIT_MS = 30000;
 
@@ -41,6 +43,25 @@
 
   function saveSnapshot() {
     localStorage.setItem(SNAPSHOT_KEY, JSON.stringify(snapshot));
+  }
+
+  function loadAddRun() {
+    try {
+      const run = JSON.parse(sessionStorage.getItem(ADD_RUN_KEY) || "null");
+      return Array.isArray(run?.tasks) && Number.isInteger(run.index) ? run : null;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function saveAddRun(run, armResume = false) {
+    const next = { ...run, resumeUntil: armResume ? Date.now() + ADD_RUN_TTL_MS : run.resumeUntil || 0 };
+    sessionStorage.setItem(ADD_RUN_KEY, JSON.stringify(next));
+    return next;
+  }
+
+  function clearAddRun() {
+    sessionStorage.removeItem(ADD_RUN_KEY);
   }
 
   function log(message) {
@@ -263,38 +284,61 @@
       });
   }
 
-  async function addSelectedOffers() {
-    const tasks = selectedTasks();
-    if (!tasks.length || scanInProgress || addInProgress) return;
-    if (!window.confirm(`Add ${tasks.length} selected offer(s)? Chase will apply each offer to the selected card.`)) return;
+  function taskFromRun(run) {
+    const item = run.tasks[run.index];
+    if (!item) return null;
+    const offer = snapshot.offers.find((candidate) => candidate.key === item.offerKey);
+    const card = snapshot.cards.find((candidate) => candidate.id === item.cardId);
+    return offer && card ? { offer, card } : null;
+  }
 
+  function advanceAddRun(run) {
+    run.index += 1;
+    return saveAddRun(run);
+  }
+
+  async function processAddRun() {
+    let run = loadAddRun();
+    if (!run || scanInProgress || addInProgress) return;
     addInProgress = true;
     cancelRequested = false;
     render();
     try {
-      for (let index = 0; index < tasks.length && !cancelRequested; index += 1) {
-        const { card, offer } = tasks[index];
-        log(`Adding ${index + 1}/${tasks.length}: ${offer.name} to ${card.name}`);
+      while (run.index < run.tasks.length && !cancelRequested) {
+        const task = taskFromRun(run);
+        if (!task) {
+          log(`Skipped ${run.index + 1}/${run.tasks.length}: the scanned offer or card is no longer available.`);
+          run = advanceAddRun(run);
+          continue;
+        }
+        const { card, offer } = task;
+        log(`Adding ${run.index + 1}/${run.tasks.length}: ${offer.name} to ${card.name}`);
+        run = saveAddRun(run, true);
         const loaded = await openOffers(card);
         if (!loaded || pageHasOfferError()) {
           log(`Skipped ${offer.name}: Chase did not load ${card.name}.`);
+          run = advanceAddRun(run);
           continue;
         }
         const button = findAddButton(offer);
         if (!button) {
           log(`Skipped ${offer.name}: it is no longer addable on ${card.name}.`);
+          run = advanceAddRun(run);
           continue;
         }
         button.scrollIntoView({ block: "center", inline: "nearest" });
         await sleep(250);
         if (cancelRequested) break;
+        run = saveAddRun(run, true);
         button.click();
         await sleep(900);
 
         if (!isOffersPage(card.id)) {
+          run = saveAddRun(run, true);
           const returned = await openOffers(card);
           if (!returned) {
             log(`Could not verify ${offer.name} on ${card.name}.`);
+            run = advanceAddRun(run);
             continue;
           }
         }
@@ -308,13 +352,31 @@
         } else {
           log(`Could not confirm ${offer.name} on ${card.name}; review it in Chase before retrying.`);
         }
+        run = advanceAddRun(run);
       }
+      if (cancelRequested) log("Stopped by user.");
+      else if (run.index >= run.tasks.length) log("Finished all selected offers.");
     } catch (error) {
       log(`Adding stopped: ${error.message}`);
     } finally {
+      clearAddRun();
       addInProgress = false;
       render();
     }
+  }
+
+  async function addSelectedOffers() {
+    const tasks = selectedTasks();
+    if (!tasks.length || scanInProgress || addInProgress) return;
+    if (!window.confirm(`Add ${tasks.length} selected offer(s)? Chase will apply each offer to the selected card.`)) return;
+    saveAddRun({ tasks: tasks.map(({ offer, card }) => ({ offerKey: offer.key, cardId: card.id })), index: 0 });
+    await processAddRun();
+  }
+
+  function stopCurrentRun() {
+    cancelRequested = true;
+    clearAddRun();
+    log("Stop requested. The current page action will finish safely.");
   }
 
   function filteredOffers() {
@@ -425,7 +487,7 @@
     panel.querySelector("[data-select]")?.addEventListener("click", selectVisibleAddable);
     panel.querySelector("[data-clear]")?.addEventListener("click", clearSelection);
     panel.querySelector("[data-add]")?.addEventListener("click", addSelectedOffers);
-    panel.querySelector("[data-stop]")?.addEventListener("click", () => { cancelRequested = true; log("Stop requested. The current page action will finish safely."); });
+    panel.querySelector("[data-stop]")?.addEventListener("click", stopCurrentRun);
     panel.querySelector("[data-search]")?.addEventListener("input", (event) => { searchTerm = event.target.value; render(); });
     panel.querySelectorAll("[data-filter]").forEach((button) => button.addEventListener("click", () => { viewFilter = button.dataset.filter; render(); }));
     panel.querySelectorAll("[data-toggle]").forEach((button) => button.addEventListener("click", () => {
@@ -434,12 +496,19 @@
   }
 
   if (globalThis.__CHASE_ASSISTANT_TEST__) {
-    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks };
+    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun };
     return;
   }
 
   if (!document.getElementById(ID)) {
     panel = makePanel();
     render();
+    const pendingRun = loadAddRun();
+    if (pendingRun?.resumeUntil > Date.now()) {
+      log(`Continuing ${pendingRun.tasks.length - pendingRun.index} selected offer(s) after Chase navigation.`);
+      window.setTimeout(processAddRun, 800);
+    } else if (pendingRun) {
+      clearAddRun();
+    }
   }
 })();

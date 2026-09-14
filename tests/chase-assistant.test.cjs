@@ -11,6 +11,7 @@ function load() {
   const context = vm.createContext({
     globalThis: {},
     localStorage: { getItem: (key) => local.get(key) || null, setItem: (key, value) => local.set(key, value) },
+    sessionStorage: { getItem: (key) => local.get(`session:${key}`) || null, setItem: (key, value) => local.set(`session:${key}`, value), removeItem: (key) => local.delete(`session:${key}`) },
     location: { href: 'https://secure.chase.com/web/auth/dashboard#/dashboard/overview', hash: '#/dashboard/overview' },
     document: { body: { innerText: '' }, querySelectorAll: () => [], getElementById: () => null },
     window: { getComputedStyle: () => ({ display: 'block', visibility: 'visible' }) }
@@ -41,4 +42,13 @@ test('strips controls while retaining offer display text', () => {
 test('Chase commerce tiles remain the single source of offer state', () => {
   assert.match(source, /\[data-testid="commerce-tile"\]/);
   assert.match(source, /getAttribute\("aria-label"\)/);
+});
+
+test('add queue is retained only while the user-started run has a resume permit', () => {
+  const { saveAddRun, loadAddRun, clearAddRun } = load();
+  saveAddRun({ tasks: [{ offerKey: 'merchant 10% cash back', cardId: '1234' }], index: 0 }, true);
+  assert.equal(loadAddRun().tasks.length, 1);
+  assert.ok(loadAddRun().resumeUntil > 0);
+  clearAddRun();
+  assert.equal(loadAddRun(), null);
 });
