@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.4
+// @version      0.1.5
 // @description  Scan and manage Chase Offers across cards, with explicit confirmation before adding.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -168,6 +168,11 @@
     return offers;
   }
 
+  function offerTiles() {
+    return Array.from(document.querySelectorAll('[data-testid="commerce-tile"]'))
+      .filter((tile) => !tile.closest?.(`#${ID}`) && isVisible(tile));
+  }
+
   function mergeCardOffers(card, cardOffers) {
     const offers = new Map(snapshot.offers.map((offer) => [offer.key, offer]));
     for (const offer of offers.values()) delete offer.cards[card.id];
@@ -196,8 +201,16 @@
   }
 
   async function openOffers(card) {
-    if (!isOffersPage(card.id)) location.assign(offerHubUrl(card.id));
-    return waitFor(() => pageHasOfferError() || (isOffersPage(card.id) && readOffersForCard().length > 0));
+    const needsNavigation = !isOffersPage(card.id);
+    // Chase updates the hash before React swaps the offer grid. Without this
+    // guard, a scan can incorrectly read the previous card's visible tiles.
+    const previousTiles = needsNavigation ? offerTiles() : [];
+    if (needsNavigation) location.assign(offerHubUrl(card.id));
+    return waitFor(() => {
+      if (pageHasOfferError()) return true;
+      const previousGridRemoved = previousTiles.length === 0 || previousTiles.every((tile) => !tile.isConnected);
+      return isOffersPage(card.id) && previousGridRemoved && readOffersForCard().length > 0;
+    });
   }
 
   async function scanAllCards() {

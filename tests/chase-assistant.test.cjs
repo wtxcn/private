@@ -58,3 +58,8 @@ test('the summary view does not cap the aggregated offer list', () => {
   assert.match(source, /Unique offers/);
   assert.match(source, /data-card-filter/);
 });
+
+test('card transitions wait for the prior offer grid to detach before scanning', () => {
+  assert.match(source, /previousTiles\.every\(\(tile\) => !tile\.isConnected\)/);
+  assert.match(source, /previousGridRemoved/);
+});
