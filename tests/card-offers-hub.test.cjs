@@ -96,8 +96,24 @@ test('Hub captures added Amex offers directly from the dashboard', () => {
   dom.window.close();
 });
 
+test('Hub captures the Amex Added to Card page and uses its authoritative selected-card label', () => {
+  const html = '<div data-testid="simple_switcher_wrapper"><div role="combobox" aria-label="Open to manage your other accounts"><div data-testid="simple_switcher_selected_option_display" aria-label="Business Platinum Card® ending in 91001."><span>Wrong stale card ••••11005</span></div></div></div><div data-testid="addedToCardViewAllContainer"><div class="offer-row"><img alt="Valentino - Luxury Fashion & Accessories"><div><h3>Valentino - Luxury Fashion & Accessories</h3><span>Spend $1,100 or more, earn $220 back</span><span>Expires 9/15/26</span><button>Terms apply</button><button data-testid="merchantOfferDetailsLink">View Details</button></div></div></div>';
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers/enrolled?opaqueAccountId=opaque-secret-1234');
+  w.document.body.innerHTML = html;
+  assert.equal(api.collectAmexPage(), true);
+  assert.equal(api.syncCurrentBank(true), true);
+  const item = api.placements().find(placement => placement.bank === 'amex');
+  assert.equal(item.name, 'Valentino - Luxury Fashion & Accessories');
+  assert.equal(item.status, 'added');
+  assert.match(item.card, /Business Platinum Card/);
+  assert.match(item.card, /91001/);
+  assert.doesNotMatch(item.card, /11005/);
+  assert.doesNotMatch(JSON.stringify(api.getData()), /opaque-secret-1234/);
+  dom.window.close();
+});
+
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.3/);
+  assert.match(source, /@version\s+0\.1\.4/);
   assert.match(source, /right:18px;bottom:18px/);
   assert.match(source, /panel\.style\.bottom = "auto"/);
   assert.doesNotMatch(source, /suppressLauncherClick/);
