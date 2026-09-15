@@ -84,9 +84,10 @@ test('Hub captures visible Amex addable offers without storing opaque account ID
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.1/);
+  assert.match(source, /@version\s+0\.1\.2/);
   assert.match(source, /right:18px;bottom:18px/);
   assert.match(source, /panel\.style\.bottom = "auto"/);
+  assert.doesNotMatch(source, /suppressLauncherClick/);
   assert.match(source, /@updateURL.*CardOffersHub\.user\.js/);
   assert.match(source, /GM_getValue/);
   assert.match(source, /GM_setValue/);
