@@ -72,7 +72,7 @@ test('Hub renders combined CVS results with profile, bank, card and status filte
 });
 
 test('Hub captures visible Amex addable offers without storing opaque account IDs', () => {
-  const html = '<div data-testid="simple_switcher_wrapper">Gold Card ••••1008</div><div><h3>CVS</h3><p>Spend $50, get $10</p><button title="add to list card">+</button><button>View Details</button></div>';
+  const html = '<div data-testid="simple_switcher_wrapper">Gold Card ••••1008</div><div id="offer-cvs"><img alt="CVS"><button title="add to list card">CVS Spend $50, get $10 Expires 10/31/2026</button></div>';
   const { dom, w, api } = setup('https://global.americanexpress.com/offers?opaqueAccountId=opaque-secret-1234');
   w.document.body.innerHTML = html;
   assert.equal(api.collectAmexPage(), true);
@@ -83,8 +83,21 @@ test('Hub captures visible Amex addable offers without storing opaque account ID
   dom.window.close();
 });
 
+test('Hub captures added Amex offers directly from the dashboard', () => {
+  const html = '<div role="combobox" aria-label="Open to manage your other accounts">Marriott Card ••••11005</div><input id="ENROLLED" type="radio" checked><div id="offer-valentino"><button id="header-panel-valentino"><img alt="Valentino - Luxury Fashion & Accessories">Spend $1,100 or more, earn $220 back Valentino - Luxury Fashion & Accessories Expires today</button><span>Added to Card ••••11005</span></div>';
+  const { dom, w, api } = setup('https://global.americanexpress.com/dashboard');
+  w.document.body.innerHTML = html;
+  assert.equal(api.collectAmexPage(), true);
+  assert.equal(api.syncCurrentBank(true), true);
+  const item = api.placements().find(placement => placement.bank === 'amex');
+  assert.equal(item.name, 'Valentino - Luxury Fashion & Accessories');
+  assert.equal(item.status, 'added');
+  assert.match(item.card, /11005/);
+  dom.window.close();
+});
+
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.2/);
+  assert.match(source, /@version\s+0\.1\.3/);
   assert.match(source, /right:18px;bottom:18px/);
   assert.match(source, /panel\.style\.bottom = "auto"/);
   assert.doesNotMatch(source, /suppressLauncherClick/);
