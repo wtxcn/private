@@ -28,30 +28,29 @@ function chaseSource(name, cardId, publishedAt) {
   } };
 }
 
-test('Hub keeps P1 and P2 bank snapshots together and hashes source card IDs', () => {
+test('Hub merges repeated bank scans by card and hashes source card IDs', () => {
   const { dom, w, api } = setup();
   w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Freedom', '123456789', 1000)));
   assert.equal(api.syncCurrentBank(), true);
-  api.setProfile('chase', 'P2');
   w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Sapphire', '987654321', 2000)));
-  assert.equal(api.syncCurrentBank(), true);
+  assert.equal(api.syncCurrentBank(true), true);
   const items = Array.from(api.placements());
-  assert.deepEqual(items.map(item => item.profile).sort(), ['P1', 'P2']);
+  assert.deepEqual(items.map(item => item.card).sort(), ['Freedom (...6789)', 'Sapphire (...4321)']);
   assert.equal(items.every(item => item.name.includes('CVS')), true);
   const serialized = JSON.stringify(api.getData());
   assert.doesNotMatch(serialized, /123456789|987654321|private log|private\/image|selected/);
+  assert.doesNotMatch(serialized, /P1|P2|profile/);
   assert.match(serialized, /\.\.\.6789/);
   assert.match(serialized, /\.\.\.4321/);
   dom.window.close();
 });
 
-test('Hub renders combined CVS results with profile, bank, card and status filters', () => {
+test('Hub renders combined CVS results with bank, card and status filters', () => {
   const { dom, w, api } = setup();
   w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Freedom', '123456789', Date.now())));
   api.syncCurrentBank();
-  api.setProfile('chase', 'P2');
   w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Sapphire', '987654321', Date.now() + 1)));
-  api.syncCurrentBank();
+  api.syncCurrentBank(true);
   const panel = api.mount();
   const root = panel.shadowRoot;
   const input = root.querySelector('[data-search]');
@@ -63,11 +62,26 @@ test('Hub renders combined CVS results with profile, bank, card and status filte
   }
   assert.equal(root.querySelectorAll('.placement').length, 2);
   assert.equal(root.querySelectorAll('.offer').length, 1);
-  assert.match(root.querySelector('[data-results]').textContent, /P1/);
-  assert.match(root.querySelector('[data-results]').textContent, /P2/);
-  root.querySelector('[data-profile-filter="P2"]').click();
-  assert.equal(root.querySelectorAll('.placement').length, 1);
+  assert.match(root.querySelector('[data-results]').textContent, /Freedom/);
   assert.match(root.querySelector('[data-results]').textContent, /Sapphire/);
+  assert.equal(root.querySelector('[data-profile-filters]'), null);
+  assert.equal(root.querySelector('[data-set-profile]'), null);
+  dom.window.close();
+});
+
+test('Hub migrates legacy P1 and P2 snapshots into one bank dataset', () => {
+  const { dom, values, api } = setup();
+  values.set('cardOffersHub.data.v1', { version: 1, snapshots: {
+    'P1:chase': { profile: 'P1', bank: 'chase', cards: [{ id: 'card-a', name: 'Freedom (...1111)' }], offers: [{ key: 'cvs', name: 'CVS', description: '$10 back', cards: { 'card-a': 'added' } }], scannedAt: 1000 },
+    'P2:chase': { profile: 'P2', bank: 'chase', cards: [{ id: 'card-b', name: 'Sapphire (...2222)' }], offers: [{ key: 'cvs', name: 'CVS', description: '$10 back', cards: { 'card-b': 'addable' } }], scannedAt: 2000 },
+    'P1:citi': { profile: 'P1', bank: 'citi', cards: [{ id: 'card-c', name: 'Citi (...3333)' }], offers: [{ key: 'lyft', name: 'Lyft', description: '10% back', cards: { 'card-c': 'added' } }], scannedAt: 1500 }
+  } });
+  const data = api.getData();
+  assert.deepEqual(Object.keys(data.snapshots), ['chase', 'citi']);
+  assert.equal(data.snapshots.chase.cards.length, 2);
+  assert.equal(Object.keys(data.snapshots.chase.offers[0].cards).length, 2);
+  assert.equal(api.placements().length, 3);
+  assert.doesNotMatch(JSON.stringify(data), /P1|P2|profile/);
   dom.window.close();
 });
 
@@ -113,7 +127,8 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.4/);
+  assert.match(source, /@version\s+0\.1\.5/);
+  assert.doesNotMatch(source, /data-set-profile|data-profile-filter|All people|This .* login saves as/);
   assert.match(source, /right:18px;bottom:18px/);
   assert.match(source, /panel\.style\.bottom = "auto"/);
   assert.doesNotMatch(source, /suppressLauncherClick/);

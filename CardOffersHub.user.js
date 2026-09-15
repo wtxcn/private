@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Card Offers Hub
 // @namespace    https://github.com/wtxcn/private
-// @version      0.1.4
-// @description  Combine P1 and P2 card-offer snapshots from supported banks into one private local search hub.
+// @version      0.1.5
+// @description  Combine card-offer snapshots from supported banks into one private local search hub.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
 // @match        https://online.citi.com/US/nga/products-offers/merchantoffers*
@@ -23,7 +23,6 @@
 
   const ID = "card-offers-hub";
   const DATA_KEY = "cardOffersHub.data.v1";
-  const PROFILE_KEY = bank => `cardOffersHub.profile.${bank}`;
   const BANKS = {
     chase: { name: "Chase", color: "#0874cf", source: "cardOffersHubSource.chase.v1", legacy: "chaseOffersAssistantSnapshot.v1" },
     citi: { name: "Citi", color: "#056dae", source: "cardOffersHubSource.citi.v1", legacy: "citi-offers-assistant.snapshot.v1" },
@@ -42,7 +41,6 @@
   let root;
   let minimized = true;
   let query = "";
-  let profileFilter = "all";
   let bankFilter = "all";
   let statusFilter = "all";
   let notice = "";
@@ -62,10 +60,17 @@
         : location.hostname.includes("americanexpress.com") ? "amex" : "";
   const getData = () => {
     const value = GM_getValue(DATA_KEY, { version: 1, snapshots: {} });
-    return value && value.snapshots && typeof value.snapshots === "object" ? value : { version: 1, snapshots: {} };
+    if (!value || !value.snapshots || typeof value.snapshots !== "object") return { version: 2, snapshots: {} };
+    const snapshots = {};
+    for (const [key, snapshot] of Object.entries(value.snapshots)) {
+      if (!snapshot || !Array.isArray(snapshot.cards) || !Array.isArray(snapshot.offers)) continue;
+      const bank = snapshot.bank || key.split(":").pop();
+      if (!BANKS[bank]) continue;
+      snapshots[bank] = mergeSnapshots(snapshots[bank], { ...snapshot, bank });
+    }
+    return { version: 2, snapshots };
   };
   const saveData = value => GM_setValue(DATA_KEY, value);
-  const getProfile = bank => GM_getValue(PROFILE_KEY(bank), "P1") === "P2" ? "P2" : "P1";
 
   function hashId(value) {
     let hash = 2166136261;
@@ -101,6 +106,34 @@
     return { cards, offers, scannedAt: Number(snapshot.scannedAt) || Date.now() };
   }
 
+  function mergeSnapshots(existing, incoming) {
+    const cleanIncoming = {
+      bank: incoming.bank,
+      publishedAt: Number(incoming.publishedAt) || 0,
+      cards: incoming.cards,
+      offers: incoming.offers,
+      scannedAt: Number(incoming.scannedAt) || 0
+    };
+    if (!existing) return cleanIncoming;
+    const cards = new Map(existing.cards.map(card => [card.id, card]));
+    for (const card of cleanIncoming.cards) cards.set(card.id, card);
+    const offers = new Map(existing.offers.map(offer => [offer.key, { ...offer, cards: { ...offer.cards } }]));
+    for (const offer of cleanIncoming.offers) {
+      const prior = offers.get(offer.key) || { key: offer.key, name: offer.name, description: "", cards: {} };
+      prior.name = offer.name || prior.name;
+      prior.description = offer.description || prior.description;
+      Object.assign(prior.cards, offer.cards);
+      offers.set(offer.key, prior);
+    }
+    return {
+      bank: cleanIncoming.bank || existing.bank,
+      publishedAt: Math.max(Number(existing.publishedAt) || 0, cleanIncoming.publishedAt),
+      cards: [...cards.values()],
+      offers: [...offers.values()],
+      scannedAt: Math.max(Number(existing.scannedAt) || 0, cleanIncoming.scannedAt)
+    };
+  }
+
   function sourceFromStorage(bank) {
     const config = BANKS[bank];
     const published = readJson(localStorage.getItem(config.source));
@@ -120,12 +153,11 @@
     if (!force && sourceText === lastSourceText) return false;
     const snapshot = sanitizeSnapshot(bank, source.snapshot);
     if (!snapshot) return false;
-    const profile = getProfile(bank);
     const data = getData();
-    data.snapshots[`${profile}:${bank}`] = { profile, bank, publishedAt: Number(source.publishedAt) || Date.now(), ...snapshot };
+    data.snapshots[bank] = mergeSnapshots(data.snapshots[bank], { bank, publishedAt: Number(source.publishedAt) || Date.now(), ...snapshot });
     saveData(data);
     lastSourceText = sourceText;
-    notice = `${profile} ${BANKS[bank].name} synced`;
+    notice = `${BANKS[bank].name} synced`;
     render();
     return true;
   }
@@ -204,7 +236,7 @@
       const cards = new Map(snapshot.cards.map(card => [card.id, card]));
       for (const offer of snapshot.offers) {
         for (const [cardId, status] of Object.entries(offer.cards)) {
-          output.push({ profile: snapshot.profile, bank: snapshot.bank, card: cards.get(cardId)?.name || "Card", status, name: offer.name, description: offer.description || "", scannedAt: snapshot.scannedAt });
+          output.push({ bank: snapshot.bank, card: cards.get(cardId)?.name || "Card", status, name: offer.name, description: offer.description || "", scannedAt: snapshot.scannedAt });
         }
       }
     }
@@ -213,11 +245,10 @@
 
   function filteredPlacements() {
     const needle = normalize(query);
-    return placements().filter(item => (profileFilter === "all" || item.profile === profileFilter)
-      && (bankFilter === "all" || item.bank === bankFilter)
+    return placements().filter(item => (bankFilter === "all" || item.bank === bankFilter)
       && (statusFilter === "all" || item.status === statusFilter)
       && (!needle || normalize(`${item.name} ${item.description} ${item.card} ${BANKS[item.bank]?.name}`).includes(needle)))
-      .sort((left, right) => left.name.localeCompare(right.name) || left.profile.localeCompare(right.profile) || left.bank.localeCompare(right.bank));
+      .sort((left, right) => left.name.localeCompare(right.name) || left.bank.localeCompare(right.bank) || left.card.localeCompare(right.card));
   }
 
   function groupedResults() {
@@ -241,13 +272,6 @@
     return `${Math.floor(hours / 24)}d ago`;
   }
 
-  function setProfile(bank, profile) {
-    GM_setValue(PROFILE_KEY(bank), profile);
-    lastSourceText = "";
-    syncCurrentBank(true);
-    render();
-  }
-
   function download(name, content, type) {
     const url = URL.createObjectURL(new Blob([content], { type }));
     const link = document.createElement("a");
@@ -263,7 +287,7 @@
 
   function exportCsv() {
     const quote = value => `"${String(value ?? "").replace(/"/g, '""')}"`;
-    const rows = [["Profile", "Bank", "Card", "Status", "Offer", "Description", "Last scanned"], ...placements().map(item => [item.profile, BANKS[item.bank]?.name || item.bank, item.card, item.status, item.name, item.description, new Date(item.scannedAt).toISOString()])];
+    const rows = [["Bank", "Card", "Status", "Offer", "Description", "Last scanned"], ...placements().map(item => [BANKS[item.bank]?.name || item.bank, item.card, item.status, item.name, item.description, new Date(item.scannedAt).toISOString()])];
     download(`card-offers-${new Date().toISOString().slice(0, 10)}.csv`, rows.map(row => row.map(quote).join(",")).join("\n"), "text/csv;charset=utf-8");
   }
 
@@ -306,21 +330,18 @@
     if (!root) return;
     const items = placements();
     const groups = groupedResults();
-    const profiles = new Set(items.map(item => item.profile)).size;
     const banks = new Set(items.map(item => item.bank)).size;
     const current = currentBank();
-    const currentProfile = current ? getProfile(current) : "";
-    root.querySelector("[data-current-profile]").innerHTML = current
-      ? `<span>This ${escapeHtml(BANKS[current].name)} login saves as</span><button class="profile ${currentProfile === "P1" ? "active" : ""}" data-set-profile="P1">P1</button><button class="profile ${currentProfile === "P2" ? "active" : ""}" data-set-profile="P2">P2</button>`
+    root.querySelector("[data-current-bank]").innerHTML = current
+      ? `<span>Syncing ${escapeHtml(BANKS[current].name)} offers by bank and card</span>`
       : '<span>Open a supported bank page to sync new scans.</span>';
-    root.querySelector("[data-stats]").innerHTML = `<div><b>${profiles}</b><span>People</span></div><div><b>${banks}</b><span>Banks</span></div><div><b>${groups.length}</b><span>Matches</span></div><div><b>${filteredPlacements().length}</b><span>Cards</span></div>`;
-    root.querySelector("[data-profile-filters]").innerHTML = ["all", "P1", "P2"].map(value => `<button class="chip ${profileFilter === value ? "active" : ""}" data-profile-filter="${value}">${value === "all" ? "All people" : value}</button>`).join("");
+    root.querySelector("[data-stats]").innerHTML = `<div><b>${banks}</b><span>Banks</span></div><div><b>${groups.length}</b><span>Matches</span></div><div><b>${filteredPlacements().length}</b><span>Cards</span></div>`;
     root.querySelector("[data-bank-filters]").innerHTML = ["all", ...Object.keys(BANKS)].map(value => `<button class="chip ${bankFilter === value ? "active" : ""}" data-bank-filter="${value}">${value === "all" ? "All banks" : BANKS[value].name}</button>`).join("");
     root.querySelector("[data-status-filters]").innerHTML = ["all", "addable", "added", "unknown"].map(value => `<button class="chip ${statusFilter === value ? "active" : ""}" data-status-filter="${value}">${value === "all" ? "Any status" : value === "unknown" ? "Unverified" : value[0].toUpperCase() + value.slice(1)}</button>`).join("");
     root.querySelector("[data-results]").innerHTML = groups.map(group => `<article class="offer"><div class="offer-title"><div><strong>${escapeHtml(group.name)}</strong><span>${group.rows.length} card offer${group.rows.length === 1 ? "" : "s"}</span></div><b>${group.rows.length}</b></div><div class="placements">${group.rows.map(item => {
       const terms = [normalize(item.name) === normalize(group.name) ? "" : item.name, item.description].filter(Boolean).join(" · ");
-      return `<div class="placement"><span class="person ${item.profile.toLowerCase()}">${item.profile}</span><span class="bank" style="--bank:${BANKS[item.bank]?.color || "#64748b"}">${escapeHtml(BANKS[item.bank]?.name || item.bank)}</span><span class="card"><strong>${escapeHtml(item.card)}</strong>${terms ? `<small>${escapeHtml(terms)}</small>` : ""}</span><span class="state ${item.status}">${item.status === "unknown" ? "Unverified" : item.status}</span><time>${relativeTime(item.scannedAt)}</time></div>`;
-    }).join("")}</div></article>`).join("") || `<div class="empty">${items.length ? "No offers match this search." : "No synced offers yet. Choose P1 or P2 on a bank page, then run that bank's scan."}</div>`;
+      return `<div class="placement"><span class="bank" style="--bank:${BANKS[item.bank]?.color || "#64748b"}">${escapeHtml(BANKS[item.bank]?.name || item.bank)}</span><span class="card"><strong>${escapeHtml(item.card)}</strong>${terms ? `<small>${escapeHtml(terms)}</small>` : ""}</span><span class="state ${item.status}">${item.status === "unknown" ? "Unverified" : item.status}</span><time>${relativeTime(item.scannedAt)}</time></div>`;
+    }).join("")}</div></article>`).join("") || `<div class="empty">${items.length ? "No offers match this search." : "No synced offers yet. Open a bank offers page, then run that bank's scan."}</div>`;
     root.querySelector("[data-notice]").textContent = notice || `${items.length} card-offer records stored locally`;
     setMinimized(minimized);
   }
@@ -330,8 +351,8 @@
     panel.id = ID;
     root = panel.attachShadow({ mode: "open" });
     root.innerHTML = `<style>
-      :host{position:fixed;z-index:2147483645;right:18px;bottom:18px;width:min(720px,calc(100vw - 36px));color:#142033;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color-scheme:light}:host(.minimized){width:auto}*{box-sizing:border-box;letter-spacing:0}svg{display:block;width:18px;height:18px}.launcher{display:none;align-items:center;gap:8px;padding:10px 13px;border:1px solid #0a2b63;border-radius:7px;background:#0a2b63;color:#fff;box-shadow:0 8px 24px #14203333;font:700 13px/1 inherit;cursor:pointer}:host(.minimized) .launcher{display:flex}:host(.minimized) .shell{display:none}.shell{display:flex;max-height:calc(100dvh - 36px);flex-direction:column;overflow:hidden;border:1px solid #d9e0e9;border-radius:8px;background:#f6f8fb;box-shadow:0 16px 38px #1420332e}.header{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid #e1e6ed;background:#fff;cursor:grab;touch-action:none}.mark{display:grid;width:42px;height:42px;place-items:center;flex:none;border-radius:7px;background:#0a2b63;color:#fff}.title{flex:1;min-width:0}.title strong{display:block;color:#071f52;font-size:18px;font-weight:800}.title span{display:block;color:#6d7889;font-size:11px}.icon{display:grid;width:32px;height:32px;place-items:center;padding:0;border:1px solid #d5dce6;border-radius:6px;background:#fff;color:#183b68;cursor:pointer}.profile-bar{display:flex;align-items:center;gap:7px;padding:10px 16px;border-bottom:1px solid #e2e7ee;background:#eef4fa;color:#42566f;font-size:12px}.profile-bar span{margin-right:auto}.profile,.chip{padding:6px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#45556b;font:700 11px/1.2 inherit;cursor:pointer}.profile.active,.chip.active{border-color:#0a2b63;background:#0a2b63;color:#fff}.controls{padding:12px 16px;border-bottom:1px solid #e1e6ed}.search{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid #cfd8e4;border-radius:7px;background:#fff;color:#718096}.search input{width:100%;min-width:0;border:0;outline:0;background:transparent;color:#142033;font:15px/1.4 inherit}.toolbar,.filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.toolbar{margin-top:9px}.toolbar button{display:inline-flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#344861;font:700 11px/1.2 inherit;cursor:pointer}.toolbar .spacer{flex:1}.filters{margin-top:8px}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;margin-top:10px}.stats div{padding:8px;border:1px solid #dce3ec;border-radius:6px;background:#fff}.stats b,.stats span{display:block}.stats b{color:#071f52;font-size:18px}.stats span{color:#7a8594;font-size:10px}.results{display:flex;min-height:80px;flex-direction:column;gap:8px;overflow:auto;padding:12px 16px}.offer{border:1px solid #dfe5ec;border-radius:7px;background:#fff}.offer-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px}.offer-title strong{display:block;color:#071f52;font-size:17px;font-weight:800;overflow-wrap:anywhere}.offer-title span{display:block;margin-top:2px;color:#697586;font-size:12px}.offer-title>b{min-width:28px;color:#53657a;text-align:right}.placements{border-top:1px solid #edf0f4}.placement{display:grid;grid-template-columns:34px 76px minmax(110px,1fr) 76px 52px;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid #edf0f4;font-size:11px}.placement:first-child{border-top:0}.person{display:inline-grid;width:30px;height:22px;place-items:center;border-radius:5px;background:#dbeafe;color:#1d4f91;font-weight:800}.person.p2{background:#fce7f3;color:#9d174d}.bank{padding-left:7px;border-left:3px solid var(--bank);font-weight:800}.card{display:block;min-width:0;color:#344861}.card strong,.card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card strong{font-size:11px}.card small{margin-top:2px;color:#778395;font-size:10px}.state{font-weight:800;text-transform:capitalize}.state.added{color:#28784f}.state.addable{color:#0874cf}.state.unknown{color:#9a5b13}.placement time{color:#8490a0;text-align:right}.empty{padding:32px 18px;color:#697586;text-align:center}.footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 16px;border-top:1px solid #e1e6ed;background:#fff;color:#6e7b8c;font-size:11px}@media(max-width:560px){:host{right:8px;bottom:8px;width:calc(100vw - 16px)}.shell{max-height:calc(100dvh - 16px)}.toolbar .spacer{display:none}.placement{grid-template-columns:34px 70px minmax(0,1fr)}.state,.placement time{grid-column:auto}.profile-bar{flex-wrap:wrap}.profile-bar span{width:100%;margin:0}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}}
-    </style><button class="launcher" data-restore>${ICONS.card}<span>Offer Hub</span></button><div class="shell"><header class="header" data-drag><span class="mark">${ICONS.card}</span><div class="title"><strong>Card Offers Hub</strong><span>P1 + P2 private local search</span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${ICONS.minimize}</button></header><div class="profile-bar" data-current-profile></div><div class="controls"><label class="search">${ICONS.search}<input data-search type="search" placeholder="Search CVS, Lyft, dining..."></label><div class="toolbar"><button data-sync>${ICONS.refresh}Sync now</button><span class="spacer"></span><button data-json>${ICONS.download}JSON</button><button data-csv>${ICONS.download}CSV</button></div><div class="filters" data-profile-filters></div><div class="filters" data-bank-filters></div><div class="filters" data-status-filters></div><div class="stats" data-stats></div></div><section class="results" data-results></section><footer class="footer"><span data-notice></span><span>v0.1.4</span></footer></div>`;
+      :host{position:fixed;z-index:2147483645;right:18px;bottom:18px;width:min(720px,calc(100vw - 36px));color:#142033;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color-scheme:light}:host(.minimized){width:auto}*{box-sizing:border-box;letter-spacing:0}svg{display:block;width:18px;height:18px}.launcher{display:none;align-items:center;gap:8px;padding:10px 13px;border:1px solid #0a2b63;border-radius:7px;background:#0a2b63;color:#fff;box-shadow:0 8px 24px #14203333;font:700 13px/1 inherit;cursor:pointer}:host(.minimized) .launcher{display:flex}:host(.minimized) .shell{display:none}.shell{display:flex;max-height:calc(100dvh - 36px);flex-direction:column;overflow:hidden;border:1px solid #d9e0e9;border-radius:8px;background:#f6f8fb;box-shadow:0 16px 38px #1420332e}.header{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid #e1e6ed;background:#fff;cursor:grab;touch-action:none}.mark{display:grid;width:42px;height:42px;place-items:center;flex:none;border-radius:7px;background:#0a2b63;color:#fff}.title{flex:1;min-width:0}.title strong{display:block;color:#071f52;font-size:18px;font-weight:800}.title span{display:block;color:#6d7889;font-size:11px}.icon{display:grid;width:32px;height:32px;place-items:center;padding:0;border:1px solid #d5dce6;border-radius:6px;background:#fff;color:#183b68;cursor:pointer}.bank-bar{display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid #e2e7ee;background:#eef4fa;color:#42566f;font-size:12px}.chip{padding:6px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#45556b;font:700 11px/1.2 inherit;cursor:pointer}.chip.active{border-color:#0a2b63;background:#0a2b63;color:#fff}.controls{padding:12px 16px;border-bottom:1px solid #e1e6ed}.search{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid #cfd8e4;border-radius:7px;background:#fff;color:#718096}.search input{width:100%;min-width:0;border:0;outline:0;background:transparent;color:#142033;font:15px/1.4 inherit}.toolbar,.filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.toolbar{margin-top:9px}.toolbar button{display:inline-flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#344861;font:700 11px/1.2 inherit;cursor:pointer}.toolbar .spacer{flex:1}.filters{margin-top:8px}.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}.stats div{padding:8px;border:1px solid #dce3ec;border-radius:6px;background:#fff}.stats b,.stats span{display:block}.stats b{color:#071f52;font-size:18px}.stats span{color:#7a8594;font-size:10px}.results{display:flex;min-height:80px;flex-direction:column;gap:8px;overflow:auto;padding:12px 16px}.offer{border:1px solid #dfe5ec;border-radius:7px;background:#fff}.offer-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px}.offer-title strong{display:block;color:#071f52;font-size:17px;font-weight:800;overflow-wrap:anywhere}.offer-title span{display:block;margin-top:2px;color:#697586;font-size:12px}.offer-title>b{min-width:28px;color:#53657a;text-align:right}.placements{border-top:1px solid #edf0f4}.placement{display:grid;grid-template-columns:76px minmax(110px,1fr) 76px 52px;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid #edf0f4;font-size:11px}.placement:first-child{border-top:0}.bank{padding-left:7px;border-left:3px solid var(--bank);font-weight:800}.card{display:block;min-width:0;color:#344861}.card strong,.card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card strong{font-size:11px}.card small{margin-top:2px;color:#778395;font-size:10px}.state{font-weight:800;text-transform:capitalize}.state.added{color:#28784f}.state.addable{color:#0874cf}.state.unknown{color:#9a5b13}.placement time{color:#8490a0;text-align:right}.empty{padding:32px 18px;color:#697586;text-align:center}.footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 16px;border-top:1px solid #e1e6ed;background:#fff;color:#6e7b8c;font-size:11px}@media(max-width:560px){:host{right:8px;bottom:8px;width:calc(100vw - 16px)}.shell{max-height:calc(100dvh - 16px)}.toolbar .spacer{display:none}.placement{grid-template-columns:70px minmax(0,1fr)}.state,.placement time{grid-column:auto}.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
+    </style><button class="launcher" data-restore>${ICONS.card}<span>Offer Hub</span></button><div class="shell"><header class="header" data-drag><span class="mark">${ICONS.card}</span><div class="title"><strong>Card Offers Hub</strong><span>Private local search by bank and card</span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${ICONS.minimize}</button></header><div class="bank-bar" data-current-bank></div><div class="controls"><label class="search">${ICONS.search}<input data-search type="search" placeholder="Search CVS, Lyft, dining..."></label><div class="toolbar"><button data-sync>${ICONS.refresh}Sync now</button><span class="spacer"></span><button data-json>${ICONS.download}JSON</button><button data-csv>${ICONS.download}CSV</button></div><div class="filters" data-bank-filters></div><div class="filters" data-status-filters></div><div class="stats" data-stats></div></div><section class="results" data-results></section><footer class="footer"><span data-notice></span><span>v0.1.5</span></footer></div>`;
     document.body.appendChild(panel);
     root.querySelector("[data-search]").addEventListener("input", event => { query = event.target.value; render(); });
     root.addEventListener("click", event => {
@@ -339,8 +360,6 @@
       if (!button) return;
       if (button.dataset.restore !== undefined) setMinimized(false);
       else if (button.dataset.minimize !== undefined) setMinimized(true);
-      else if (button.dataset.setProfile) setProfile(currentBank(), button.dataset.setProfile);
-      else if (button.dataset.profileFilter) { profileFilter = button.dataset.profileFilter; render(); }
       else if (button.dataset.bankFilter) { bankFilter = button.dataset.bankFilter; render(); }
       else if (button.dataset.statusFilter) { statusFilter = button.dataset.statusFilter; render(); }
       else if (button.dataset.sync !== undefined) { notice = syncCurrentBank(true) ? notice : "No completed scan found on this page"; render(); }
@@ -354,7 +373,7 @@
     render();
   }
 
-  const api = { sanitizeSnapshot, placements, filteredPlacements, groupedResults, syncCurrentBank, collectAmexPage, getData, setProfile, render, mount: () => { mount(); return panel; } };
+  const api = { sanitizeSnapshot, mergeSnapshots, placements, filteredPlacements, groupedResults, syncCurrentBank, collectAmexPage, getData, render, mount: () => { mount(); return panel; } };
   if (globalThis.__CARD_OFFERS_HUB_TEST__) { globalThis.__CARD_OFFERS_HUB_TEST__.api = api; return; }
   if (window.top !== window.self || document.getElementById(ID)) return;
   mount();
