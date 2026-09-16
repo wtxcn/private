@@ -234,6 +234,25 @@ test('US Bank: card labels and offer details expose the real card ending', async
   assert.equal(api.snapshot().offers.some(offer => offer.cards['cashback-deals']), false);
   dom.window.close();
 });
+test('US Bank: account menu exposes card endings but ignores deposit account endings', async () => {
+  const html = '<button id="accounts" aria-expanded="false">Accounts</button><nav id="menu" hidden><a>Checking ...4593</a><a>CASH+ ...3531</a><a>UAC 6741 ...6741</a></nav>';
+  const { dom, api, w } = setup('usbank', html);
+  const accounts = w.document.querySelector('#accounts');
+  const menu = w.document.querySelector('#menu');
+  accounts.onclick = () => {
+    const expanded = accounts.getAttribute('aria-expanded') !== 'true';
+    accounts.setAttribute('aria-expanded', String(expanded));
+    menu.hidden = !expanded;
+  };
+  const cards = await api.adapter.accountCards();
+  assert.deepEqual(Array.from(cards, card => card.name), [
+    'U.S. Bank CASH+ (...3531)',
+    'U.S. Bank UAC 6741 (...6741)'
+  ]);
+  assert.equal(accounts.getAttribute('aria-expanded'), 'false');
+  assert.equal(api.adapter.cardFromAccountText('Savings ...1111'), null);
+  dom.window.close();
+});
 test('packaged scripts have independent identities, no remote library, no confirmation or resume-on-boot', () => {
   for (const name of ['CitiOffersAssistant', 'USBankOffersAssistant']) {
     const code = fs.readFileSync(path.join(base, `${name}.user.js`), 'utf8');
@@ -246,7 +265,7 @@ test('packaged scripts have independent identities, no remote library, no confir
     assert.match(code, /pointermove/);
     assert.match(code, /cardOffersHubSource\.\$\{config\.adapter\}\.v1/);
   }
-  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.7/);
+  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.8/);
 });
 
 test('an omitted card-offer record on rescan cannot make a partial offer fully added', () => {

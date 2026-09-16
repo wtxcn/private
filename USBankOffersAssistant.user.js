@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         U.S. Bank Offers Assistant
 // @namespace    https://onlinebanking.usbank.com/
-// @version      0.1.7
+// @version      0.1.8
 // @description  Scan and select offers locally. Enrollment starts only when you click Add selected.
 // @match        https://onlinebanking.usbank.com/digital/*
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/USBankOffersAssistant.user.js
@@ -510,6 +510,16 @@ function createUSBankAdapter(env) {
     if (!name || name.length > 110) name = "U.S. Bank Card";
     return { id: `cashback-deals:${tail}`, name: `${name} (...${tail})`, legacyIds: [scope.id], kind: "card" };
   }
+  function cardFromAccountText(value) {
+    const source = String(value || "").replace(/\s+/g, " ").trim();
+    const match = source.match(/^(.*?)\s*(?:[•*x]{2,}|\.{3})\s*(\d{4,5})\b/i);
+    if (!match) return null;
+    const name = match[1].trim();
+    if (!name || /\b(?:checking|savings|money market|certificate|brokerage|investment|mortgage|loan|line of credit|home equity|retirement|ira)\b/i.test(name)) return null;
+    const tail = match[2];
+    const display = /^U\.?S\.? Bank\b/i.test(name) ? name : `U.S. Bank ${name}`;
+    return { id: `cashback-deals:${tail}`, name: `${display} (...${tail})`, legacyIds: [scope.id], kind: "card" };
+  }
   function cardFromNode(node) {
     if (!node) return null;
     return cardFromText([node.getAttribute?.("aria-label"), node.getAttribute?.("title"), text(node)].filter(Boolean).join(" "));
@@ -527,7 +537,25 @@ function createUSBankAdapter(env) {
     return nodes.map(cardFromNode).find(Boolean) || null;
   }
   function currentCard() { assertPage(); return pageCard() || { ...scope }; }
-  async function discoverCards() { return [currentCard()]; }
+  async function accountCards() {
+    assertPage();
+    const accounts = all("button").find(node => visible(node) && enabled(node) && /^Accounts$/i.test(text(node)));
+    let opened = false;
+    if (accounts && accounts.getAttribute("aria-expanded") !== "true") {
+      click(accounts);
+      opened = true;
+      await waitFor(() => accounts.getAttribute("aria-expanded") === "true", 5000);
+    }
+    const cards = new Map();
+    for (const node of all("a, button, [role=link]")) {
+      if (!visible(node)) continue;
+      const card = cardFromAccountText(text(node));
+      if (card) cards.set(card.id, card);
+    }
+    if (opened && accounts?.isConnected && accounts.getAttribute("aria-expanded") === "true") click(accounts);
+    return [...cards.values()];
+  }
+  async function discoverCards() { return [{ ...scope }]; }
   async function openCard(card) {
     assertPage();
     if (card.id !== scope.id && !card.id.startsWith(`${scope.id}:`)) throw new Error("This deal collection is no longer available.");
@@ -617,6 +645,7 @@ function createUSBankAdapter(env) {
   async function scanCard() {
     assertPage();
     if (modal()) await closeDetail(modal());
+    const eligibleCards = await accountCards();
     const allTab = all('button, [role="tab"]').find(node => visible(node) && /^All deals(?:\s*\(?\d+\)?)?$/i.test(text(node)));
     if (allTab && allTab.getAttribute("aria-selected") !== "true") { click(allTab); await sleep(700); }
     const inspected = new Map();
@@ -641,7 +670,14 @@ function createUSBankAdapter(env) {
       return [...inspected.values()];
     }, assertPage);
     if (!result.offers.length) throw new Error("No recognizable cash-back deals. Existing scan retained.");
-    return result;
+    if (!eligibleCards.length) {
+      env.log("U.S. Bank did not expose a recognizable card ending; keeping the account-level collection.");
+      return result;
+    }
+    return {
+      ...result,
+      offers: result.offers.flatMap(offer => eligibleCards.map(card => ({ ...offer, card })))
+    };
   }
   async function addOffer(card, offer) {
     await openCard(card);
@@ -665,8 +701,8 @@ function createUSBankAdapter(env) {
       await closeDetail(detail);
     }
   }
-  return { assertPage, cardFromText, pageCard, detailCard, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
+  return { assertPage, cardFromText, cardFromAccountText, accountCards, pageCard, detailCard, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
 }
 
-createOffersAssistant({"file":"USBankOffersAssistant.user.js","adapter":"usbank","factory":"createUSBankAdapter","id":"usbank-offers-assistant","name":"U.S. Bank Offers Assistant","version":"0.1.7","namespace":"https://onlinebanking.usbank.com/","match":"https://onlinebanking.usbank.com/digital/*","accent":"#b42339","legacyStore":"usBankOfferClickerState.v1","legacyPanel":"usbank-offer-clicker","cardMode":false,"scopePlural":"cards","allLabel":"All cards","scanLabel":"Scan deals","icons":{"card":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"/><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"/></svg>","search":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>","collapse":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg>","trash":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>"}}, createUSBankAdapter);
+createOffersAssistant({"file":"USBankOffersAssistant.user.js","adapter":"usbank","factory":"createUSBankAdapter","id":"usbank-offers-assistant","name":"U.S. Bank Offers Assistant","version":"0.1.8","namespace":"https://onlinebanking.usbank.com/","match":"https://onlinebanking.usbank.com/digital/*","accent":"#b42339","legacyStore":"usBankOfferClickerState.v1","legacyPanel":"usbank-offer-clicker","cardMode":false,"scopePlural":"cards","allLabel":"All cards","scanLabel":"Scan deals","icons":{"card":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><rect width=\"20\" height=\"14\" x=\"2\" y=\"5\" rx=\"2\"/><line x1=\"2\" x2=\"22\" y1=\"10\" y2=\"10\"/></svg>","search":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m21 21-4.34-4.34\"/><circle cx=\"11\" cy=\"11\" r=\"8\"/></svg>","collapse":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"m7 15 5 5 5-5\"/><path d=\"m7 9 5-5 5 5\"/></svg>","trash":"<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 24 24\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"2\" stroke-linecap=\"round\" stroke-linejoin=\"round\" aria-hidden=\"true\"><path d=\"M10 11v6\"/><path d=\"M14 11v6\"/><path d=\"M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6\"/><path d=\"M3 6h18\"/><path d=\"M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2\"/></svg>"}}, createUSBankAdapter);
 })();

@@ -20,6 +20,16 @@ function createUSBankAdapter(env) {
     if (!name || name.length > 110) name = "U.S. Bank Card";
     return { id: `cashback-deals:${tail}`, name: `${name} (...${tail})`, legacyIds: [scope.id], kind: "card" };
   }
+  function cardFromAccountText(value) {
+    const source = String(value || "").replace(/\s+/g, " ").trim();
+    const match = source.match(/^(.*?)\s*(?:[•*x]{2,}|\.{3})\s*(\d{4,5})\b/i);
+    if (!match) return null;
+    const name = match[1].trim();
+    if (!name || /\b(?:checking|savings|money market|certificate|brokerage|investment|mortgage|loan|line of credit|home equity|retirement|ira)\b/i.test(name)) return null;
+    const tail = match[2];
+    const display = /^U\.?S\.? Bank\b/i.test(name) ? name : `U.S. Bank ${name}`;
+    return { id: `cashback-deals:${tail}`, name: `${display} (...${tail})`, legacyIds: [scope.id], kind: "card" };
+  }
   function cardFromNode(node) {
     if (!node) return null;
     return cardFromText([node.getAttribute?.("aria-label"), node.getAttribute?.("title"), text(node)].filter(Boolean).join(" "));
@@ -37,7 +47,25 @@ function createUSBankAdapter(env) {
     return nodes.map(cardFromNode).find(Boolean) || null;
   }
   function currentCard() { assertPage(); return pageCard() || { ...scope }; }
-  async function discoverCards() { return [currentCard()]; }
+  async function accountCards() {
+    assertPage();
+    const accounts = all("button").find(node => visible(node) && enabled(node) && /^Accounts$/i.test(text(node)));
+    let opened = false;
+    if (accounts && accounts.getAttribute("aria-expanded") !== "true") {
+      click(accounts);
+      opened = true;
+      await waitFor(() => accounts.getAttribute("aria-expanded") === "true", 5000);
+    }
+    const cards = new Map();
+    for (const node of all("a, button, [role=link]")) {
+      if (!visible(node)) continue;
+      const card = cardFromAccountText(text(node));
+      if (card) cards.set(card.id, card);
+    }
+    if (opened && accounts?.isConnected && accounts.getAttribute("aria-expanded") === "true") click(accounts);
+    return [...cards.values()];
+  }
+  async function discoverCards() { return [{ ...scope }]; }
   async function openCard(card) {
     assertPage();
     if (card.id !== scope.id && !card.id.startsWith(`${scope.id}:`)) throw new Error("This deal collection is no longer available.");
@@ -127,6 +155,7 @@ function createUSBankAdapter(env) {
   async function scanCard() {
     assertPage();
     if (modal()) await closeDetail(modal());
+    const eligibleCards = await accountCards();
     const allTab = all('button, [role="tab"]').find(node => visible(node) && /^All deals(?:\s*\(?\d+\)?)?$/i.test(text(node)));
     if (allTab && allTab.getAttribute("aria-selected") !== "true") { click(allTab); await sleep(700); }
     const inspected = new Map();
@@ -151,7 +180,14 @@ function createUSBankAdapter(env) {
       return [...inspected.values()];
     }, assertPage);
     if (!result.offers.length) throw new Error("No recognizable cash-back deals. Existing scan retained.");
-    return result;
+    if (!eligibleCards.length) {
+      env.log("U.S. Bank did not expose a recognizable card ending; keeping the account-level collection.");
+      return result;
+    }
+    return {
+      ...result,
+      offers: result.offers.flatMap(offer => eligibleCards.map(card => ({ ...offer, card })))
+    };
   }
   async function addOffer(card, offer) {
     await openCard(card);
@@ -175,5 +211,5 @@ function createUSBankAdapter(env) {
       await closeDetail(detail);
     }
   }
-  return { assertPage, cardFromText, pageCard, detailCard, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
+  return { assertPage, cardFromText, cardFromAccountText, accountCards, pageCard, detailCard, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
 }
