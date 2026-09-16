@@ -68,6 +68,42 @@ test('add queue is retained only while the user-started run has a resume permit'
   assert.equal(loadAddRun(), null);
 });
 
+test('an ineligible Chase card is removed from the remaining add queue at once', () => {
+  const api = load({
+    cards: [{ id: 'a', name: 'Card A' }, { id: 'b', name: 'Card B' }],
+    offers: [
+      { key: 'first', name: 'First', cards: { a: 'addable', b: 'addable' } },
+      { key: 'second', name: 'Second', cards: { a: 'addable' } },
+      { key: 'confirmed', name: 'Confirmed', cards: { a: 'added' } }
+    ],
+    selected: { first: ['a', 'b'], second: ['a'] },
+    scannedAt: 1,
+    logs: []
+  });
+  const original = api.saveAddRun({ tasks: [
+    { offerKey: 'first', cardId: 'a' },
+    { offerKey: 'first', cardId: 'b' },
+    { offerKey: 'second', cardId: 'a' }
+  ], index: 0 });
+  const result = api.removeCardTasks(original, 'a');
+  assert.equal(result.skipped, 2);
+  assert.deepEqual(Array.from(result.run.tasks, task => task.cardId), ['b']);
+  assert.equal(result.run.index, 0);
+  assert.equal(api.markCardUnavailable({ id: 'a', name: 'Card A' }), 2);
+  assert.deepEqual(Array.from(api.selectedTasks(), task => `${task.offer.key}:${task.card.id}`), ['first:b']);
+  const offers = Array.from(api.filteredOffers());
+  assert.equal(offers.find(offer => offer.key === 'first').cards.a, 'unknown');
+  assert.equal(offers.find(offer => offer.key === 'second').cards.a, 'unknown');
+  assert.equal(offers.find(offer => offer.key === 'confirmed').cards.a, 'added');
+});
+
+test('Chase ineligible page errors skip the whole card instead of retrying each offer', () => {
+  assert.match(source, /function pageOfferErrorMessage\(\)/);
+  assert.match(source, /Chase says this card is not eligible for Offers/);
+  assert.match(source, /run = skipUnavailableCard\(run, card, loadError\)/);
+  assert.match(source, /run = skipUnavailableCard\(run, card, verifyError\)/);
+});
+
 test('the summary view does not cap the aggregated offer list', () => {
   assert.doesNotMatch(source, /offers\.slice\(0, 400\)/);
   assert.match(source, /Unique offers/);
@@ -99,13 +135,15 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.15/);
+  assert.match(source, /@version\s+0\.1\.16/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
   assert.match(source, /offer-meta\.complete \{ color:#61ae85/);
   assert.match(source, /offer-name \{ color:#071f52; font-size:17px; font-weight:800/);
   assert.match(source, /card\.added \{ color:#28784f; border-color:#76c59a; background:#eaf7ef/);
+  assert.match(source, /card\.unverified \{ color:#945c15/);
+  assert.match(source, /status !== "addable"/);
   assert.match(source, /text-decoration:none/);
   assert.match(source, /cardOffersHubSource\.chase\.v1/);
   assert.match(source, /publishHubSnapshot\(\)/);

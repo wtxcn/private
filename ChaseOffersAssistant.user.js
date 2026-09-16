@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.15
+// @version      0.1.16
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -148,8 +148,15 @@
       && (!accountId || currentAccountId() === String(accountId));
   }
 
+  function pageOfferErrorMessage() {
+    const text = textOf(document.querySelector?.('#title-focus-target, [role="alert"]')) || textOf(document.body);
+    if (/your account is not eligible to access Chase Offers/i.test(text)) return "Chase says this card is not eligible for Offers";
+    if (/unable to (?:load|access|display|show).{0,40}(?:Chase )?Offers/i.test(text)) return "Chase could not load Offers for this card";
+    return "";
+  }
+
   function pageHasOfferError() {
-    return /your account is not eligible to access Chase Offers/i.test(textOf(document.body));
+    return Boolean(pageOfferErrorMessage());
   }
 
   function getCardName(node) {
@@ -357,6 +364,40 @@
     return saveAddRun(run);
   }
 
+  function removeCardTasks(run, cardId) {
+    const completed = run.tasks.slice(0, run.index);
+    const pending = run.tasks.slice(run.index);
+    const remaining = pending.filter((task) => task.cardId !== cardId);
+    return {
+      run: saveAddRun({ ...run, tasks: [...completed, ...remaining] }),
+      skipped: pending.length - remaining.length
+    };
+  }
+
+  function markCardUnavailable(card) {
+    let changed = 0;
+    for (const offer of snapshot.offers) {
+      if (offer.cards[card.id] === "addable") {
+        offer.cards[card.id] = "unknown";
+        changed += 1;
+      }
+      if (snapshot.selected?.[offer.key]?.includes(card.id)) {
+        snapshot.selected[offer.key] = snapshot.selected[offer.key].filter((id) => id !== card.id);
+        if (!snapshot.selected[offer.key].length) delete snapshot.selected[offer.key];
+      }
+    }
+    saveSnapshot();
+    publishHubSnapshot();
+    return changed;
+  }
+
+  function skipUnavailableCard(run, card, reason) {
+    const result = removeCardTasks(run, card.id);
+    const changed = markCardUnavailable(card);
+    log(`Skipped ${card.name}: ${reason}. Removed ${result.skipped} pending task(s); ${changed} offer(s) marked unverified.`);
+    return result.run;
+  }
+
   async function processAddRun() {
     let run = loadAddRun();
     if (!run || scanInProgress || addInProgress) return;
@@ -375,7 +416,12 @@
         log(`Adding ${run.index + 1}/${run.tasks.length}: ${offer.name} to ${card.name}`);
         run = saveAddRun(run, true);
         const loaded = await openOffers(card);
-        if (!loaded || pageHasOfferError()) {
+        const loadError = pageOfferErrorMessage();
+        if (loadError) {
+          run = skipUnavailableCard(run, card, loadError);
+          continue;
+        }
+        if (!loaded) {
           log(`Skipped ${offer.name}: Chase did not load ${card.name}.`);
           run = advanceAddRun(run);
           continue;
@@ -396,13 +442,24 @@
         if (!isOffersPage(card.id)) {
           run = saveAddRun(run, true);
           const returned = await openOffers(card);
+          const returnError = pageOfferErrorMessage();
+          if (returnError) {
+            run = skipUnavailableCard(run, card, returnError);
+            continue;
+          }
           if (!returned) {
             log(`Could not verify ${offer.name} on ${card.name}.`);
             run = advanceAddRun(run);
             continue;
           }
         }
-        const added = await waitFor(() => readOffersForCard().some((item) => item.key === offer.key && item.status === "added"), 12000);
+        const settled = await waitFor(() => pageHasOfferError() || readOffersForCard().some((item) => item.key === offer.key && item.status === "added"), 12000);
+        const verifyError = pageOfferErrorMessage();
+        if (verifyError) {
+          run = skipUnavailableCard(run, card, verifyError);
+          continue;
+        }
+        const added = settled && readOffersForCard().some((item) => item.key === offer.key && item.status === "added");
         if (added) {
           offer.cards[card.id] = "added";
           snapshot.selected[offer.key] = (snapshot.selected[offer.key] || []).filter((id) => id !== card.id);
@@ -561,8 +618,8 @@
         return `<article class="offer ${selectedRow ? "selected-row" : ""}" data-offer="${escapeHtml(encodeURIComponent(offer.key))}"><button type="button" class="offer-head" data-offer-select aria-pressed="${allSelected}" aria-label="${escapeHtml(`${allSelected ? "Deselect" : "Select"} all eligible cards for ${offer.name}`)}" ${selectionDisabled ? "disabled" : ""}><span class="offer-logo-wrap">${logo}</span><span class="offer-main"><span class="offer-name">${escapeHtml(offer.name)}</span><span class="offer-meta ${isComplete ? "complete" : ""}">${meta}</span></span><span class="offer-count ${isComplete ? "complete" : ""}">${isComplete ? added : addable}<span>${isComplete ? "added" : "eligible"}</span></span></button><div class="cards">${snapshot.cards.filter((card) => offer.cards[card.id]).map((card) => {
           const status = offer.cards[card.id];
           const isSelected = (snapshot.selected[offer.key] || []).includes(card.id);
-          const classes = `card ${status === "added" ? "added" : isSelected ? "selected" : ""}`;
-          return `<button class="${classes}" data-toggle="${escapeHtml(encodeURIComponent(offer.key))}" data-card="${card.id}" ${status === "added" || scanInProgress || addInProgress ? "disabled" : ""}>${escapeHtml(card.name)}</button>`;
+          const classes = `card ${status === "added" ? "added" : status === "unknown" ? "unverified" : isSelected ? "selected" : ""}`;
+          return `<button class="${classes}" data-toggle="${escapeHtml(encodeURIComponent(offer.key))}" data-card="${card.id}" ${status !== "addable" || scanInProgress || addInProgress ? "disabled" : ""}>${escapeHtml(card.name)}</button>`;
         }).join("")}</div></article>`;
       }).join("") || "<div class=\"empty\">No offers match this view.</div>";
     panel.innerHTML = `
@@ -635,6 +692,7 @@
         #${ID} .card { margin:0; padding:5px 7px; border-color:#e1e5eb; background:#fff; color:#687387; font-size:11px; font-weight:600; }
         #${ID} .card.selected { color:#fff; border-color:#0a2b63; background:#0a2b63; }
         #${ID} .card.added { color:#28784f; border-color:#76c59a; background:#eaf7ef; box-shadow:inset 0 0 0 1px rgba(57,151,97,.12); cursor:default; font-weight:700; opacity:1; text-decoration:none; }
+        #${ID} .card.unverified { color:#945c15; border-color:#e2c38e; background:#fff8e9; cursor:default; opacity:1; }
         #${ID} .empty { padding:30px 16px; color:#64748b; text-align:center; }
         #${ID} .card-summary { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:3px 14px; width:100%; margin:0; padding:12px; color:#142033; background:#fff; border:1px solid #d7e0ec; border-radius:7px; box-shadow:0 1px 2px rgba(0,23,62,.04); text-align:left; }
         #${ID} .card-summary:hover { border-color:#4b9cda; box-shadow:0 0 0 1px #4b9cda inset; }
@@ -710,7 +768,7 @@
   }
 
   if (globalThis.__CHASE_ASSISTANT_TEST__) {
-    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers, mount: () => { panel = makePanel(); render(); return panel; }, render, minimized: () => minimized };
+    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, removeCardTasks, markCardUnavailable, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers, mount: () => { panel = makePanel(); render(); return panel; }, render, minimized: () => minimized };
     return;
   }
 
