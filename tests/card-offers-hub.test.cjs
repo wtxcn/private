@@ -87,6 +87,26 @@ test('Hub renders a full-page dashboard with local bank and card data', () => {
   dom.window.close();
 });
 
+test('Hub opens the dashboard in a generated local tab', () => {
+  const { dom, w, api } = setup();
+  const popupDom = new JSDOM('', { url: 'about:blank', pretendToBeVisual: true });
+  popupDom.window.focus = () => {};
+  w.open = () => popupDom.window;
+  w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Freedom', '123456789', Date.now())));
+  api.syncCurrentBank();
+  assert.equal(api.openDashboard(), true);
+  const dashboard = popupDom.window.document.querySelector('#card-offers-dashboard');
+  assert.ok(dashboard);
+  assert.equal(popupDom.window.document.title, 'Card Offers Dashboard');
+  assert.match(dashboard.shadowRoot.querySelector('[data-dashboard-results]').textContent, /CVS/);
+  assert.match(dashboard.shadowRoot.querySelector('[data-dashboard-results]').textContent, /Chase/);
+  assert.match(dashboard.shadowRoot.querySelector('[data-dashboard-results]').textContent, /Freedom/);
+  assert.equal(popupDom.window.name, '');
+  assert.equal(popupDom.window.opener, null);
+  popupDom.window.close();
+  dom.window.close();
+});
+
 test('Hub migrates legacy P1 and P2 snapshots into one bank dataset', () => {
   const { dom, values, api } = setup();
   values.set('cardOffersHub.data.v1', { version: 1, snapshots: {
@@ -145,8 +165,11 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.6/);
-  assert.match(source, /card-offers-dashboard=1/);
+  assert.match(source, /@version\s+0\.1\.7/);
+  assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
+  assert.doesNotMatch(source, /card-offers-dashboard=1/);
+  assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);
+  assert.match(source, /popup\.opener = null/);
   assert.match(source, /Open Card Offers Dashboard/);
   assert.doesNotMatch(source, /data-set-profile|data-profile-filter|All people|This .* login saves as/);
   assert.match(source, /right:18px;bottom:18px/);
