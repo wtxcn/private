@@ -84,6 +84,20 @@ npm run check:build
 
 Do not commit bank screenshots, account snapshots, cookies or real card identifiers.
 
+## Private VPN dashboard
+
+`CardOffersHub.user.js` can copy its already-sanitized bank, card-ending, offer and status data to a small server on the same Mac. The server keeps its data and random keys in `~/.card-offers-hub`, outside this repository.
+
+Install or update the service:
+
+```sh
+npm run server:install
+```
+
+The installer listens only on `127.0.0.1` and the detected `100.x` VPN address. It does not listen on the Mac's ordinary Wi-Fi/LAN address. Tampermonkey pairs through localhost and automatically syncs after an offer snapshot changes. Remote readers must be connected to the same VPN and provide the random read key from `~/.card-offers-hub/config.json`.
+
+The server validates and rebuilds every upload. It retains only supported bank names, hashed card IDs, safe card labels, offer text, status and scan time. It discards cookies, login details, full card numbers, selections, images and logs.
+
 ## Why this script exists
 
 The direct enrollment API can hit CORS or 429 errors. The safer approach is to click the same native Amex offer buttons a person would click.

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Card Offers Hub
 // @namespace    https://github.com/wtxcn/private
-// @version      0.1.7
+// @version      0.1.8
 // @description  Combine card-offer snapshots from supported banks into one private local search hub.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -14,6 +14,8 @@
 // @grant        GM_setValue
 // @grant        GM_registerMenuCommand
 // @grant        GM_addValueChangeListener
+// @grant        GM_xmlhttpRequest
+// @connect      127.0.0.1
 // @run-at       document-idle
 // ==/UserScript==
 
@@ -23,6 +25,8 @@
   const ID = "card-offers-hub";
   const DASHBOARD_ID = "card-offers-dashboard";
   const DATA_KEY = "cardOffersHub.data.v1";
+  const SERVER_PAIR_KEY = "cardOffersHub.localServer.v1";
+  const SERVER_BASE = "http://127.0.0.1:8787";
   const BANKS = {
     chase: { name: "Chase", color: "#0874cf", source: "cardOffersHubSource.chase.v1", legacy: "chaseOffersAssistantSnapshot.v1" },
     citi: { name: "Citi", color: "#056dae", source: "cardOffersHubSource.citi.v1", legacy: "citi-offers-assistant.snapshot.v1" },
@@ -49,6 +53,7 @@
   let notice = "";
   let lastSourceText = "";
   let dragState = null;
+  let serverSyncTimer = null;
 
   const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
   const normalize = value => String(value || "").normalize("NFKD").replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase();
@@ -73,7 +78,66 @@
     }
     return { version: 2, snapshots };
   };
-  const saveData = value => GM_setValue(DATA_KEY, value);
+  const saveData = value => {
+    GM_setValue(DATA_KEY, value);
+    scheduleServerSync();
+  };
+
+  function serverRequest(options) {
+    return new Promise((resolve, reject) => {
+      if (typeof GM_xmlhttpRequest !== "function") return reject(new Error("Local server sync is unavailable"));
+      GM_xmlhttpRequest({
+        timeout: 5000,
+        ...options,
+        onload: response => response.status >= 200 && response.status < 300 ? resolve(response) : reject(new Error(`Local server returned ${response.status}`)),
+        onerror: () => reject(new Error("Local server is offline")),
+        ontimeout: () => reject(new Error("Local server timed out"))
+      });
+    });
+  }
+
+  async function pairLocalServer(force = false) {
+    const stored = GM_getValue(SERVER_PAIR_KEY, null);
+    if (!force && stored?.writeToken && stored?.readToken) return stored;
+    const response = await serverRequest({ method: "GET", url: `${SERVER_BASE}/api/pair` });
+    const pairing = readJson(response.responseText);
+    if (!pairing?.writeToken || !pairing?.readToken) throw new Error("Local server pairing failed");
+    GM_setValue(SERVER_PAIR_KEY, pairing);
+    return pairing;
+  }
+
+  async function syncLocalServer() {
+    try {
+      let pairing = await pairLocalServer();
+      let response;
+      try {
+        response = await serverRequest({
+          method: "POST",
+          url: `${SERVER_BASE}/api/sync`,
+          headers: { Authorization: `Bearer ${pairing.writeToken}`, "Content-Type": "application/json" },
+          data: JSON.stringify(getData())
+        });
+      } catch (error) {
+        if (!/401/.test(error.message)) throw error;
+        pairing = await pairLocalServer(true);
+        response = await serverRequest({
+          method: "POST",
+          url: `${SERVER_BASE}/api/sync`,
+          headers: { Authorization: `Bearer ${pairing.writeToken}`, "Content-Type": "application/json" },
+          data: JSON.stringify(getData())
+        });
+      }
+      return Boolean(readJson(response.responseText)?.ok);
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function scheduleServerSync(delay = 350) {
+    if (typeof GM_xmlhttpRequest !== "function") return;
+    if (serverSyncTimer) clearTimeout(serverSyncTimer);
+    serverSyncTimer = setTimeout(() => { serverSyncTimer = null; syncLocalServer(); }, delay);
+  }
 
   function hashId(value) {
     let hash = 2166136261;
@@ -311,6 +375,28 @@
     return true;
   }
 
+  function openServerDashboard() {
+    const popup = window.open("", "card-offers-vpn-dashboard");
+    if (!popup) {
+      notice = "Allow pop-ups to open the VPN dashboard";
+      render();
+      return false;
+    }
+    popup.document.body.textContent = "Opening private VPN dashboard...";
+    pairLocalServer().then(pairing => {
+      popup.location.replace(pairing.dashboardUrl || `${SERVER_BASE}/?token=${pairing.readToken}`);
+    }).catch(() => {
+      popup.document.body.textContent = "Local Offer Server is not running. Showing the browser-only dashboard instead.";
+      setTimeout(() => {
+        popup.document.open();
+        popup.document.write('<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Card Offers Dashboard</title></head><body></body></html>');
+        popup.document.close();
+        mountDashboard(popup.document);
+      }, 600);
+    });
+    return true;
+  }
+
   function setMinimized(value) {
     minimized = Boolean(value);
     panel?.classList.toggle("minimized", minimized);
@@ -412,7 +498,7 @@
     root = panel.attachShadow({ mode: "open" });
     root.innerHTML = `<style>
       :host{position:fixed;z-index:2147483645;right:18px;bottom:18px;width:min(720px,calc(100vw - 36px));color:#142033;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color-scheme:light}:host(.minimized){width:auto}*{box-sizing:border-box;letter-spacing:0}svg{display:block;width:18px;height:18px}.launcher{display:none;align-items:center;gap:8px;padding:10px 13px;border:1px solid #0a2b63;border-radius:7px;background:#0a2b63;color:#fff;box-shadow:0 8px 24px #14203333;font:700 13px/1 inherit;cursor:pointer}:host(.minimized) .launcher{display:flex}:host(.minimized) .shell{display:none}.shell{display:flex;max-height:calc(100dvh - 36px);flex-direction:column;overflow:hidden;border:1px solid #d9e0e9;border-radius:8px;background:#f6f8fb;box-shadow:0 16px 38px #1420332e}.header{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid #e1e6ed;background:#fff;cursor:grab;touch-action:none}.mark{display:grid;width:42px;height:42px;place-items:center;flex:none;border-radius:7px;background:#0a2b63;color:#fff}.title{flex:1;min-width:0}.title strong{display:block;color:#071f52;font-size:18px;font-weight:800}.title span{display:block;color:#6d7889;font-size:11px}.icon{display:grid;width:32px;height:32px;place-items:center;padding:0;border:1px solid #d5dce6;border-radius:6px;background:#fff;color:#183b68;cursor:pointer}.bank-bar{display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid #e2e7ee;background:#eef4fa;color:#42566f;font-size:12px}.chip{padding:6px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#45556b;font:700 11px/1.2 inherit;cursor:pointer}.chip.active{border-color:#0a2b63;background:#0a2b63;color:#fff}.controls{padding:12px 16px;border-bottom:1px solid #e1e6ed}.search{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid #cfd8e4;border-radius:7px;background:#fff;color:#718096}.search input{width:100%;min-width:0;border:0;outline:0;background:transparent;color:#142033;font:15px/1.4 inherit}.toolbar,.filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.toolbar{margin-top:9px}.toolbar button{display:inline-flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#344861;font:700 11px/1.2 inherit;cursor:pointer}.toolbar .spacer{flex:1}.filters{margin-top:8px}.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}.stats div{padding:8px;border:1px solid #dce3ec;border-radius:6px;background:#fff}.stats b,.stats span{display:block}.stats b{color:#071f52;font-size:18px}.stats span{color:#7a8594;font-size:10px}.results{display:flex;min-height:80px;flex-direction:column;gap:8px;overflow:auto;padding:12px 16px}.offer{border:1px solid #dfe5ec;border-radius:7px;background:#fff}.offer-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px}.offer-title strong{display:block;color:#071f52;font-size:17px;font-weight:800;overflow-wrap:anywhere}.offer-title span{display:block;margin-top:2px;color:#697586;font-size:12px}.offer-title>b{min-width:28px;color:#53657a;text-align:right}.placements{border-top:1px solid #edf0f4}.placement{display:grid;grid-template-columns:76px minmax(110px,1fr) 76px 52px;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid #edf0f4;font-size:11px}.placement:first-child{border-top:0}.bank{padding-left:7px;border-left:3px solid var(--bank);font-weight:800}.card{display:block;min-width:0;color:#344861}.card strong,.card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card strong{font-size:11px}.card small{margin-top:2px;color:#778395;font-size:10px}.state{font-weight:800;text-transform:capitalize}.state.added{color:#28784f}.state.addable{color:#0874cf}.state.unknown{color:#9a5b13}.placement time{color:#8490a0;text-align:right}.empty{padding:32px 18px;color:#697586;text-align:center}.footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 16px;border-top:1px solid #e1e6ed;background:#fff;color:#6e7b8c;font-size:11px}@media(max-width:560px){:host{right:8px;bottom:8px;width:calc(100vw - 16px)}.shell{max-height:calc(100dvh - 16px)}.toolbar .spacer{display:none}.placement{grid-template-columns:70px minmax(0,1fr)}.state,.placement time{grid-column:auto}.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
-    </style><button class="launcher" data-restore>${ICONS.card}<span>Offer Hub</span></button><div class="shell"><header class="header" data-drag><span class="mark">${ICONS.card}</span><div class="title"><strong>Card Offers Hub</strong><span>Private local search by bank and card</span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${ICONS.minimize}</button></header><div class="bank-bar" data-current-bank></div><div class="controls"><label class="search">${ICONS.search}<input data-search type="search" placeholder="Search CVS, Lyft, dining..."></label><div class="toolbar"><button data-sync>${ICONS.refresh}Sync now</button><button data-dashboard>${ICONS.dashboard}Dashboard</button><span class="spacer"></span><button data-json>${ICONS.download}JSON</button><button data-csv>${ICONS.download}CSV</button></div><div class="filters" data-bank-filters></div><div class="filters" data-status-filters></div><div class="stats" data-stats></div></div><section class="results" data-results></section><footer class="footer"><span data-notice></span><span>v0.1.7</span></footer></div>`;
+    </style><button class="launcher" data-restore>${ICONS.card}<span>Offer Hub</span></button><div class="shell"><header class="header" data-drag><span class="mark">${ICONS.card}</span><div class="title"><strong>Card Offers Hub</strong><span>Private local search by bank and card</span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${ICONS.minimize}</button></header><div class="bank-bar" data-current-bank></div><div class="controls"><label class="search">${ICONS.search}<input data-search type="search" placeholder="Search CVS, Lyft, dining..."></label><div class="toolbar"><button data-sync>${ICONS.refresh}Sync now</button><button data-dashboard>${ICONS.dashboard}Local</button><button data-server-dashboard>${ICONS.dashboard}VPN Dashboard</button><span class="spacer"></span><button data-json>${ICONS.download}JSON</button><button data-csv>${ICONS.download}CSV</button></div><div class="filters" data-bank-filters></div><div class="filters" data-status-filters></div><div class="stats" data-stats></div></div><section class="results" data-results></section><footer class="footer"><span data-notice></span><span>v0.1.8</span></footer></div>`;
     document.body.appendChild(panel);
     root.querySelector("[data-search]").addEventListener("input", event => { query = event.target.value; render(); });
     root.addEventListener("click", event => {
@@ -424,6 +510,7 @@
       else if (button.dataset.statusFilter) { statusFilter = button.dataset.statusFilter; render(); }
       else if (button.dataset.sync !== undefined) { notice = syncCurrentBank(true) ? notice : "No completed scan found on this page"; render(); }
       else if (button.dataset.dashboard !== undefined) openDashboard();
+      else if (button.dataset.serverDashboard !== undefined) openServerDashboard();
       else if (button.dataset.json !== undefined) exportJson();
       else if (button.dataset.csv !== undefined) exportCsv();
     });
@@ -434,12 +521,14 @@
     render();
   }
 
-  const api = { sanitizeSnapshot, mergeSnapshots, placements, filteredPlacements, groupedResults, syncCurrentBank, collectAmexPage, getData, render, renderDashboard, openDashboard, mount: () => { mount(); return panel; }, mountDashboard };
+  const api = { sanitizeSnapshot, mergeSnapshots, placements, filteredPlacements, groupedResults, syncCurrentBank, syncLocalServer, pairLocalServer, collectAmexPage, getData, render, renderDashboard, openDashboard, openServerDashboard, mount: () => { mount(); return panel; }, mountDashboard };
   if (globalThis.__CARD_OFFERS_HUB_TEST__) { globalThis.__CARD_OFFERS_HUB_TEST__.api = api; return; }
   if (window.top !== window.self || document.getElementById(ID)) return;
   GM_registerMenuCommand?.("Open Card Offers Dashboard", openDashboard);
+  GM_registerMenuCommand?.("Open VPN Card Offers Dashboard", openServerDashboard);
   mount();
   syncCurrentBank();
+  scheduleServerSync(750);
   window.addEventListener("card-offers-hub-source", () => { lastSourceText = ""; syncCurrentBank(); });
   window.setInterval(() => syncCurrentBank(), 2500);
   GM_addValueChangeListener?.(DATA_KEY, () => { render(); renderDashboard(); });

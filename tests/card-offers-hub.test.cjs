@@ -107,6 +107,29 @@ test('Hub opens the dashboard in a generated local tab', () => {
   dom.window.close();
 });
 
+test('Hub pairs with and syncs sanitized data to the local Offer Server', async () => {
+  const { dom, w, values, api } = setup();
+  const requests = [];
+  w.GM_xmlhttpRequest = options => {
+    requests.push(options);
+    if (options.url.endsWith('/api/pair')) {
+      options.onload({ status: 200, responseText: JSON.stringify({ writeToken: 'write-key', readToken: 'read-key', dashboardUrl: 'http://127.0.0.1:8787/?token=read-key' }) });
+    } else {
+      options.onload({ status: 200, responseText: JSON.stringify({ ok: true }) });
+    }
+  };
+  w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Freedom', '123456789', Date.now())));
+  api.syncCurrentBank();
+  assert.equal(await api.syncLocalServer(), true);
+  assert.equal(requests.length >= 2, true);
+  const upload = requests.find(request => request.url.endsWith('/api/sync'));
+  assert.equal(upload.headers.Authorization, 'Bearer write-key');
+  assert.match(upload.data, /CVS/);
+  assert.doesNotMatch(upload.data, /123456789|private log|private\/image|selected/);
+  assert.equal(values.get('cardOffersHub.localServer.v1').readToken, 'read-key');
+  dom.window.close();
+});
+
 test('Hub migrates legacy P1 and P2 snapshots into one bank dataset', () => {
   const { dom, values, api } = setup();
   values.set('cardOffersHub.data.v1', { version: 1, snapshots: {
@@ -165,7 +188,7 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.7/);
+  assert.match(source, /@version\s+0\.1\.8/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);
@@ -176,7 +199,10 @@ test('installable Hub is updateable, local-only and never starts bank actions', 
   assert.match(source, /panel\.style\.bottom = "auto"/);
   assert.doesNotMatch(source, /suppressLauncherClick/);
   assert.match(source, /@updateURL.*CardOffersHub\.user\.js/);
+  assert.match(source, /@connect\s+127\.0\.0\.1/);
+  assert.match(source, /GM_xmlhttpRequest/);
+  assert.match(source, /http:\/\/127\.0\.0\.1:8787/);
   assert.match(source, /GM_getValue/);
   assert.match(source, /GM_setValue/);
-  assert.doesNotMatch(source, /fetch\(|XMLHttpRequest|GM_xmlhttpRequest|\.click\(\).*add offer/i);
+  assert.doesNotMatch(source, /fetch\(|\bXMLHttpRequest\b|\.click\(\).*add offer/i);
 });
