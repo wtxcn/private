@@ -69,6 +69,24 @@ test('Hub renders combined CVS results with bank, card and status filters', () =
   dom.window.close();
 });
 
+test('Hub renders a full-page dashboard with local bank and card data', () => {
+  const { dom, w, api } = setup();
+  w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Freedom', '123456789', Date.now())));
+  api.syncCurrentBank();
+  const dashboard = api.mountDashboard();
+  const root = dashboard.shadowRoot;
+  assert.match(root.querySelector('h1').textContent, /Card Offers Dashboard/);
+  assert.match(root.querySelector('[data-dashboard-results]').textContent, /CVS/);
+  assert.match(root.querySelector('[data-dashboard-results]').textContent, /Chase/);
+  assert.match(root.querySelector('[data-dashboard-results]').textContent, /Freedom/);
+  const input = root.querySelector('[data-dashboard-search]');
+  input.value = 'missing merchant';
+  input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.match(root.querySelector('[data-dashboard-results]').textContent, /No offers match/);
+  assert.equal(root.querySelector('[data-profile-filters]'), null);
+  dom.window.close();
+});
+
 test('Hub migrates legacy P1 and P2 snapshots into one bank dataset', () => {
   const { dom, values, api } = setup();
   values.set('cardOffersHub.data.v1', { version: 1, snapshots: {
@@ -127,7 +145,9 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.5/);
+  assert.match(source, /@version\s+0\.1\.6/);
+  assert.match(source, /card-offers-dashboard=1/);
+  assert.match(source, /Open Card Offers Dashboard/);
   assert.doesNotMatch(source, /data-set-profile|data-profile-filter|All people|This .* login saves as/);
   assert.match(source, /right:18px;bottom:18px/);
   assert.match(source, /panel\.style\.bottom = "auto"/);
