@@ -50,34 +50,80 @@
       .sort((left, right) => merchantName(left.name).localeCompare(merchantName(right.name)) || left.bank.localeCompare(right.bank) || left.card.localeCompare(right.card));
   }
 
-  function filterButton(label, value, selected, kind) {
+  function grouped(items) {
+    const groups = new Map();
+    for (const item of items) {
+      const merchant = merchantName(item.name);
+      const key = normalize(merchant);
+      if (!groups.has(key)) groups.set(key, { name: merchant, rows: [] });
+      groups.get(key).rows.push(item);
+    }
+    return [...groups.values()];
+  }
+
+  function filterButton(label, value, selected, kind, color = '') {
     const button = document.createElement('button');
     button.type = 'button';
     button.className = `filter${selected === value ? ' active' : ''}`;
-    button.textContent = label;
+    if (color) {
+      const dot = document.createElement('span');
+      dot.className = 'dot';
+      dot.style.setProperty('--dot', color);
+      button.appendChild(dot);
+    }
+    button.append(label);
     button.addEventListener('click', () => { state[kind] = value; render(); });
     return button;
   }
 
-  function addCell(row, value, className) {
-    const cell = document.createElement('td');
-    cell.textContent = value;
-    if (className) cell.className = className;
-    row.appendChild(cell);
-    return cell;
+  function textElement(tag, value, className = '') {
+    const element = document.createElement(tag);
+    element.textContent = value;
+    if (className) element.className = className;
+    return element;
+  }
+
+  function resultGroup(group) {
+    const section = document.createElement('section');
+    section.className = 'result-group';
+    const header = document.createElement('header');
+    header.className = 'result-header';
+    const heading = document.createElement('div');
+    heading.append(textElement('h2', group.name), textElement('p', `${group.rows.length} card offer${group.rows.length === 1 ? '' : 's'}`));
+    header.append(heading, textElement('strong', String(group.rows.length), 'result-count'));
+    const tableHead = document.createElement('div');
+    tableHead.className = 'table-head';
+    for (const label of ['Bank', 'Card', 'Offer', 'Status', 'Updated']) tableHead.appendChild(textElement('span', label));
+    section.append(header, tableHead);
+    for (const item of group.rows) {
+      const row = document.createElement('div');
+      row.className = 'table-row';
+      const bank = textElement('span', BANKS[item.bank]?.name || item.bank, 'bank');
+      bank.style.setProperty('--bank', BANKS[item.bank]?.color || '#64748b');
+      const terms = [normalize(item.name) === normalize(group.name) ? '' : item.name, item.description].filter(Boolean).join(' · ') || item.name;
+      row.append(
+        bank,
+        textElement('span', item.card, 'card'),
+        textElement('span', terms, 'offer'),
+        textElement('span', item.status === 'unknown' ? 'Unverified' : item.status, `status ${item.status}`),
+        textElement('time', relativeTime(item.scannedAt), 'time')
+      );
+      section.appendChild(row);
+    }
+    return section;
   }
 
   function render() {
     const all = placements();
     const items = filtered();
-    const offers = new Set(items.map(item => normalize(merchantName(item.name)))).size;
+    const groups = grouped(items);
     const cards = new Set(all.map(item => `${item.bank}|${item.card}`)).size;
-    elements['bank-filters'].replaceChildren(filterButton('All banks', 'all', state.bank, 'bank'), ...Object.entries(BANKS).map(([key, bank]) => filterButton(bank.name, key, state.bank, 'bank')));
+    elements['bank-filters'].replaceChildren(filterButton('All banks', 'all', state.bank, 'bank', '#64748b'), ...Object.entries(BANKS).map(([key, bank]) => filterButton(bank.name, key, state.bank, 'bank', bank.color)));
     elements['status-filters'].replaceChildren(...[['Any status', 'all'], ['Addable', 'addable'], ['Added', 'added'], ['Unverified', 'unknown']].map(([label, value]) => filterButton(label, value, state.status, 'status')));
     elements.stats.replaceChildren(...[
       [Object.keys(state.data?.snapshots || {}).length, 'Banks'],
       [cards, 'Cards'],
-      [offers, 'Offers'],
+      [groups.length, 'Offers'],
       [items.length, 'Matches']
     ].map(([value, label]) => {
       const box = document.createElement('div');
@@ -89,20 +135,9 @@
       box.append(strong, span);
       return box;
     }));
-    const rows = items.map(item => {
-      const row = document.createElement('tr');
-      addCell(row, merchantName(item.name), 'merchant');
-      const bank = addCell(row, BANKS[item.bank]?.name || item.bank, 'bank');
-      bank.style.setProperty('--bank', BANKS[item.bank]?.color || '#64748b');
-      addCell(row, item.card);
-      addCell(row, [normalize(item.name) === normalize(merchantName(item.name)) ? '' : item.name, item.description].filter(Boolean).join(' · ') || item.name);
-      addCell(row, item.status === 'unknown' ? 'Unverified' : item.status, `status ${item.status}`);
-      addCell(row, relativeTime(item.scannedAt));
-      return row;
-    });
-    elements.results.replaceChildren(...rows);
+    elements.results.replaceChildren(...groups.map(resultGroup));
     elements.empty.textContent = all.length ? 'No matching offers.' : 'No offers have been synced yet.';
-    elements.empty.hidden = rows.length > 0;
+    elements.empty.hidden = groups.length > 0;
     elements.updated.textContent = state.data?.updatedAt ? `Synced ${relativeTime(state.data.updatedAt)}` : 'No synced data';
   }
 

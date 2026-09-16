@@ -40,9 +40,15 @@ test('local Offer Server pairs only locally, sanitizes uploads and protects read
     assert.match(text, /\.\.\.6789/);
     assert.doesNotMatch(text, /123456789|private|cookies|selected/);
     const page = await fetch(base).then(response => response.text());
-    assert.match(page, /Private VPN dashboard/);
+    assert.match(page, /Private local view by bank and card/);
+    assert.match(page, /class="sidebar"/);
+    assert.match(page, /id="results"/);
     const styles = await fetch(`${base}/styles.css`).then(response => response.text());
     assert.match(styles, /\.access\[hidden\].*display:\s*none/);
+    assert.match(styles, /grid-template-columns:\s*230px minmax\(0, 1fr\)/);
+    const app = await fetch(`${base}/app.js`).then(response => response.text());
+    assert.match(app, /function grouped\(items\)/);
+    assert.match(app, /result-group/);
   } finally {
     await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
     fs.rmSync(dataDir, { recursive: true, force: true });

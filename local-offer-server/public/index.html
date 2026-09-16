@@ -8,48 +8,49 @@
   <link rel="stylesheet" href="/styles.css">
 </head>
 <body>
-  <header class="topbar">
-    <div class="brand-mark" aria-hidden="true">CO</div>
-    <div class="brand-copy">
-      <h1>Card Offers</h1>
-      <p>Private VPN dashboard</p>
+  <section class="access" id="access">
+    <div>
+      <h2>Enter access key</h2>
+      <p>The key is stored only on this device.</p>
     </div>
-    <div class="updated" id="updated">Not connected</div>
-    <button class="icon-button" id="refresh" type="button" title="Refresh" aria-label="Refresh">↻</button>
-  </header>
+    <form id="access-form">
+      <input id="access-key" type="password" autocomplete="current-password" placeholder="Access key" required>
+      <button type="submit">Open dashboard</button>
+    </form>
+    <p class="error" id="access-error" role="alert"></p>
+  </section>
 
-  <main>
-    <section class="access" id="access">
-      <div>
-        <h2>Enter access key</h2>
-        <p>The key is stored only on this device.</p>
+  <div class="dashboard" id="dashboard" hidden>
+    <header class="topbar">
+      <div class="brand-mark" aria-hidden="true">CO</div>
+      <div class="brand-copy">
+        <h1>Card Offers Dashboard</h1>
+        <p>Private local view by bank and card</p>
       </div>
-      <form id="access-form">
-        <input id="access-key" type="password" autocomplete="current-password" placeholder="Access key" required>
-        <button type="submit">Open dashboard</button>
-      </form>
-      <p class="error" id="access-error" role="alert"></p>
-    </section>
+      <div class="updated" id="updated">Not connected</div>
+      <button class="icon-button" id="refresh" type="button" title="Refresh" aria-label="Refresh">↻</button>
+    </header>
 
-    <section class="dashboard" id="dashboard" hidden>
-      <div class="controls">
+    <main class="layout">
+      <aside class="sidebar">
+        <h2 class="side-title">Banks</h2>
+        <div class="filter-list" id="bank-filters" aria-label="Bank filter"></div>
+        <h2 class="side-title">Status</h2>
+        <div class="filter-list" id="status-filters" aria-label="Status filter"></div>
+        <p class="privacy">Offer data stays on this Mac. Bank logins, cookies and full card numbers are not stored.</p>
+      </aside>
+
+      <section class="content">
         <label class="search">
           <span aria-hidden="true">⌕</span>
-          <input id="search" type="search" placeholder="Search CVS, Lyft, dining, card...">
+          <input id="search" type="search" placeholder="Search merchant, bank, card or offer...">
         </label>
-        <div class="filters" id="bank-filters" aria-label="Bank filter"></div>
-        <div class="filters" id="status-filters" aria-label="Status filter"></div>
-      </div>
-      <div class="stats" id="stats"></div>
-      <div class="table-wrap">
-        <table>
-          <thead><tr><th>Merchant</th><th>Bank</th><th>Card</th><th>Offer</th><th>Status</th><th>Updated</th></tr></thead>
-          <tbody id="results"></tbody>
-        </table>
+        <div class="stats" id="stats"></div>
+        <div class="results" id="results"></div>
         <div class="empty" id="empty" hidden>No matching offers.</div>
-      </div>
-    </section>
-  </main>
+      </section>
+    </main>
+  </div>
   <script src="/app.js"></script>
 </body>
 </html>
