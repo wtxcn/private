@@ -46,7 +46,7 @@
     const needle = normalize(state.query);
     return placements().filter(item => (state.bank === 'all' || item.bank === state.bank)
       && (state.status === 'all' || item.status === state.status)
-      && (!needle || normalize(`${item.name} ${item.description} ${item.card} ${BANKS[item.bank]?.name}`).includes(needle)))
+      && (!needle || normalize(`${item.name} ${item.description} ${BANKS[item.bank]?.name}`).includes(needle)))
       .sort((left, right) => merchantName(left.name).localeCompare(merchantName(right.name)) || left.bank.localeCompare(right.bank) || left.card.localeCompare(right.card));
   }
 

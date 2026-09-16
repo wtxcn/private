@@ -3,6 +3,7 @@ const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const os = require('node:os');
 const path = require('node:path');
+const { JSDOM } = require('jsdom');
 const { startServer } = require('../local-offer-server/server.cjs');
 
 test('local Offer Server pairs only locally, sanitizes uploads and protects reads', async () => {
@@ -53,4 +54,33 @@ test('local Offer Server pairs only locally, sanitizes uploads and protects read
     await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
     fs.rmSync(dataDir, { recursive: true, force: true });
   }
+});
+
+test('VPN dashboard search ignores card names and card-ending digits', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '../local-offer-server/public/index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '../local-offer-server/public/app.js'), 'utf8');
+  const dom = new JSDOM(html, { url: 'http://127.0.0.1:8787/?token=read-key', runScripts: 'outside-only', pretendToBeVisual: true });
+  const data = { version: 2, updatedAt: Date.now(), snapshots: {
+    amex: {
+      bank: 'amex',
+      cards: [{ id: 'amex:marriott', name: 'Marriott Bonvoy Brilliant Card (...11008)' }],
+      offers: [
+        { key: 'empire', name: 'Empire Today', description: 'Spend $750, get $150 back', cards: { 'amex:marriott': 'addable' } },
+        { key: 'city-marriott', name: 'City Express by Marriott', description: 'Spend $500, get $100 back', cards: { 'amex:marriott': 'addable' } }
+      ],
+      scannedAt: Date.now()
+    }
+  } };
+  dom.window.fetch = async () => ({ ok: true, json: async () => data });
+  dom.window.eval(app);
+  await new Promise(resolve => setImmediate(resolve));
+  const input = dom.window.document.getElementById('search');
+  input.value = 'marriott';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  assert.match(dom.window.document.getElementById('results').textContent, /City Express by Marriott/);
+  assert.doesNotMatch(dom.window.document.getElementById('results').textContent, /Empire Today/);
+  input.value = '11008';
+  input.dispatchEvent(new dom.window.Event('input', { bubbles: true }));
+  assert.equal(dom.window.document.querySelectorAll('.result-group').length, 0);
+  dom.window.close();
 });

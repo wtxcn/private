@@ -69,6 +69,32 @@ test('Hub renders combined CVS results with bank, card and status filters', () =
   dom.window.close();
 });
 
+test('Hub search ignores card names and card-ending digits', () => {
+  const { dom, values, w, api } = setup();
+  values.set('cardOffersHub.data.v1', { version: 2, snapshots: {
+    amex: {
+      bank: 'amex',
+      cards: [{ id: 'amex:marriott', name: 'Marriott Bonvoy Brilliant Card (...11008)' }],
+      offers: [
+        { key: 'empire', name: 'Empire Today', description: 'Spend $750, get $150 back', cards: { 'amex:marriott': 'addable' } },
+        { key: 'city-marriott', name: 'City Express by Marriott', description: 'Spend $500, get $100 back', cards: { 'amex:marriott': 'addable' } }
+      ],
+      scannedAt: Date.now()
+    }
+  } });
+  const panel = api.mount();
+  const root = panel.shadowRoot;
+  const input = root.querySelector('[data-search]');
+  input.value = 'marriott';
+  input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.match(root.querySelector('[data-results]').textContent, /City Express by Marriott/);
+  assert.doesNotMatch(root.querySelector('[data-results]').textContent, /Empire Today/);
+  input.value = '11008';
+  input.dispatchEvent(new w.Event('input', { bubbles: true }));
+  assert.match(root.querySelector('[data-results]').textContent, /No offers match/);
+  dom.window.close();
+});
+
 test('Hub renders a full-page dashboard with local bank and card data', () => {
   const { dom, w, api } = setup();
   w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Freedom', '123456789', Date.now())));
@@ -188,7 +214,7 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.8/);
+  assert.match(source, /@version\s+0\.1\.9/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);
