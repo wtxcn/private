@@ -156,6 +156,25 @@ test('Hub pairs with and syncs sanitized data to the local Offer Server', async 
   dom.window.close();
 });
 
+test('Hub replaces the legacy U.S. Bank deal placeholder after a real card ending is scanned', () => {
+  const { dom, w, values, api } = setup('https://onlinebanking.usbank.com/digital/servicing/dominjection/cashback-deals');
+  values.set('cardOffersHub.data.v1', { version: 2, snapshots: {
+    usbank: { bank: 'usbank', cards: [{ id: 'usbank:legacy', name: 'Cash-back deals' }], offers: [
+      { key: 'cvs', name: 'CVS', description: '5% back', cards: { 'usbank:legacy': 'added' } }
+    ], scannedAt: 100 }
+  } });
+  w.localStorage.setItem('cardOffersHubSource.usbank.v1', JSON.stringify({ bank: 'usbank', publishedAt: 200, snapshot: {
+    cards: [{ id: 'cashback-deals:4321', name: 'U.S. Bank Cash+ Card (...4321)' }],
+    offers: [{ key: 'cvs', name: 'CVS', description: '5% back', cards: { 'cashback-deals:4321': 'added' } }],
+    scannedAt: 200
+  } }));
+  assert.equal(api.syncCurrentBank(true), true);
+  const cards = api.getData().snapshots.usbank.cards;
+  assert.deepEqual(Array.from(cards, card => card.name), ['U.S. Bank Cash+ Card (...4321)']);
+  assert.doesNotMatch(JSON.stringify(api.getData()), /Cash-back deals/);
+  dom.window.close();
+});
+
 test('Hub migrates legacy P1 and P2 snapshots into one bank dataset', () => {
   const { dom, values, api } = setup();
   values.set('cardOffersHub.data.v1', { version: 1, snapshots: {
@@ -214,7 +233,7 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.9/);
+  assert.match(source, /@version\s+0\.1\.10/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);

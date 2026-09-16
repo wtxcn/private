@@ -172,17 +172,38 @@ function createOffersAssistant(config, adapterFactory) {
     render();
   }
   function merge(card, incoming, complete = false) {
-    if (!snapshot.cards.some(c => c.id === card.id)) snapshot.cards.push({ ...card });
     const offers = new Map(snapshot.offers.map(o => [o.key, o]));
+    function upsertCard(nextCard) {
+      const aliases = Array.isArray(nextCard.legacyIds) ? nextCard.legacyIds.filter(id => id && id !== nextCard.id) : [];
+      if (aliases.length) {
+        snapshot.cards = snapshot.cards.filter(existing => !aliases.includes(existing.id));
+        for (const offer of offers.values()) for (const alias of aliases) delete offer.cards[alias];
+        for (const key of Object.keys(snapshot.selected)) {
+          snapshot.selected[key] = snapshot.selected[key].filter(id => !aliases.includes(id));
+          if (!snapshot.selected[key].length) delete snapshot.selected[key];
+        }
+      }
+      const existing = snapshot.cards.find(existingCard => existingCard.id === nextCard.id);
+      if (existing) existing.name = nextCard.name;
+      else snapshot.cards.push({ id: nextCard.id, name: nextCard.name });
+    }
+    const targets = new Map();
+    for (const item of incoming) {
+      const target = item.card?.id ? item.card : card;
+      targets.set(target.id, target);
+    }
+    if (!targets.size) targets.set(card.id, card);
+    for (const target of targets.values()) upsertCard(target);
     // A filtered or lazy-loaded grid can omit a previously seen offer. Absence is not enrollment.
-    if (complete) for (const offer of offers.values()) {
-      if (offer.cards[card.id]) offer.cards[card.id] = "unknown";
+    if (complete) for (const offer of offers.values()) for (const target of targets.values()) {
+      if (offer.cards[target.id]) offer.cards[target.id] = "unknown";
     }
     for (const item of incoming) {
+      const target = item.card?.id ? item.card : card;
       const offer = offers.get(item.key) || { key: item.key, name: item.name, description: item.description || "", imageUrl: item.imageUrl || "", cards: {} };
       offer.name = item.name;
       offer.description = item.description || "";
-      offer.cards[card.id] = ["added", "addable"].includes(item.status) ? item.status : "unknown";
+      offer.cards[target.id] = ["added", "addable"].includes(item.status) ? item.status : "unknown";
       if (item.imageUrl) offer.imageUrl = item.imageUrl;
       offers.set(item.key, offer);
     }

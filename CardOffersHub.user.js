@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Card Offers Hub
 // @namespace    https://github.com/wtxcn/private
-// @version      0.1.9
+// @version      0.1.10
 // @description  Combine card-offer snapshots from supported banks into one private local search hub.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -221,6 +221,15 @@
     const snapshot = sanitizeSnapshot(bank, source.snapshot);
     if (!snapshot) return false;
     const data = getData();
+    if (bank === "usbank" && snapshot.cards.some(card => /\.\.\.\d{4,5}\)?$/.test(card.name))) {
+      const existing = data.snapshots[bank];
+      const placeholders = new Set((existing?.cards || []).filter(card => /^Cash-back deals$/i.test(card.name)).map(card => card.id));
+      if (placeholders.size) {
+        existing.cards = existing.cards.filter(card => !placeholders.has(card.id));
+        existing.offers = existing.offers.map(offer => ({ ...offer, cards: Object.fromEntries(Object.entries(offer.cards).filter(([id]) => !placeholders.has(id))) }))
+          .filter(offer => Object.keys(offer.cards).length);
+      }
+    }
     data.snapshots[bank] = mergeSnapshots(data.snapshots[bank], { bank, publishedAt: Number(source.publishedAt) || Date.now(), ...snapshot });
     saveData(data);
     lastSourceText = sourceText;

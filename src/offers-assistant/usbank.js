@@ -1,17 +1,46 @@
 function createUSBankAdapter(env) {
   const { all, text, normalize, visible, enabled, click, sleep, waitFor, check, imageUrl, collect } = env;
   const MODAL = "#vicinity-overlay-click-modal, .cashback-offer-detail, .usb-modal-v2--dialog, .usb-modal-v2";
-  // The old script exposes a deal collection, not a per-card selector. Do not invent card eligibility.
   const scope = { id: "cashback-deals", name: "Cash-back deals", kind: "scope" };
   function assertPage() {
     if (!/\/cashback-deals/i.test(location.href)) throw new Error("Open U.S. Bank cash-back deals first.");
     if (all('input[type="password"]').some(visible)) throw new Error("Sign in to U.S. Bank and open cash-back deals.");
   }
-  function currentCard() { assertPage(); return { ...scope }; }
+  function cardFromText(value) {
+    const source = String(value || "").replace(/\s+/g, " ").trim();
+    if (!source || source.length > 260 || !/(?:card|account|visa|mastercard|amex|altitude|cash\+|shopper|connect|platinum|signature)/i.test(source)) return null;
+    const match = source.match(/(?:ending(?:\s+in)?|ends?\s+in|last\s*(?:four|4)|[•*x]{2,}|\.{3})\s*[-:]?\s*(\d{4,5})\b/i);
+    if (!match) return null;
+    const tail = match[1];
+    let name = source.slice(0, match.index)
+      .replace(/^(?:select|selected|current|choose|account)\s+/i, "")
+      .replace(/\s*(?:ending(?:\s+in)?|ends?\s+in|last\s*(?:four|4))\s*$/i, "")
+      .replace(/\s+/g, " ").trim();
+    if (name.length > 110) name = name.slice(-110).replace(/^.*?\b(?=(?:U\.?S\.? Bank|Visa|Mastercard|Amex|Card)\b)/i, "").trim();
+    if (!name || name.length > 110) name = "U.S. Bank Card";
+    return { id: `cashback-deals:${tail}`, name: `${name} (...${tail})`, legacyIds: [scope.id], kind: "card" };
+  }
+  function cardFromNode(node) {
+    if (!node) return null;
+    return cardFromText([node.getAttribute?.("aria-label"), node.getAttribute?.("title"), text(node)].filter(Boolean).join(" "));
+  }
+  function pageCard() {
+    const selectors = [
+      '[aria-label*="ending" i]', '[aria-label*="last four" i]', '[data-testid*="account" i]', '[data-testid*="card" i]',
+      '[id*="account-selector" i]', '[id*="card-selector" i]', '[role="combobox"]', 'select option'
+    ].join(",");
+    return all(selectors).map(cardFromNode).find(Boolean) || null;
+  }
+  function detailCard(detail) {
+    if (!detail) return null;
+    const nodes = [detail, ...Array.from(detail.querySelectorAll('[aria-label], [title], p, span, div, button'))];
+    return nodes.map(cardFromNode).find(Boolean) || null;
+  }
+  function currentCard() { assertPage(); return pageCard() || { ...scope }; }
   async function discoverCards() { return [currentCard()]; }
   async function openCard(card) {
     assertPage();
-    if (card.id !== scope.id) throw new Error("This deal collection is no longer available.");
+    if (card.id !== scope.id && !card.id.startsWith(`${scope.id}:`)) throw new Error("This deal collection is no longer available.");
   }
   function detailFromControl(control) {
     if (!control || !visible(control)) return null;
@@ -109,6 +138,7 @@ function createUSBankAdapter(env) {
           const detail = await openDetail(offer);
           // Scanning only opens/closes details; it never clicks Activate.
           offer.status = activated(detail) ? "added" : activateButton(detail) ? "addable" : "unknown";
+          offer.card = detailCard(detail) || pageCard() || { ...scope };
           inspected.set(offer.key, offer);
           await closeDetail(detail);
         } catch (error) {
@@ -131,6 +161,8 @@ function createUSBankAdapter(env) {
     }
     const detail = await openDetail(offer);
     try {
+      const shownCard = detailCard(detail);
+      if (shownCard && card.id !== scope.id && shownCard.id !== card.id) throw new Error("The opened offer belongs to a different U.S. Bank card.");
       if (activated(detail)) return "added";
       const button = activateButton(detail);
       if (!button) throw new Error("No native Activate Offer control for this deal.");
@@ -143,5 +175,5 @@ function createUSBankAdapter(env) {
       await closeDetail(detail);
     }
   }
-  return { assertPage, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
+  return { assertPage, cardFromText, pageCard, detailCard, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
 }

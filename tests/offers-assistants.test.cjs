@@ -214,6 +214,26 @@ test('US Bank: current OfferHub detail controls identify addable and activated d
   assert.equal(typeof api.adapter.closeDetail, 'function');
   dom.window.close();
 });
+test('US Bank: card labels and offer details expose the real card ending', async () => {
+  const html = '<button aria-label="Select U.S. Bank Cash+ Visa Signature Card ending in 4321">Account</button><button aria-label="Offer from Merchant A 10% cash back"><span>10% cash back</span></button>';
+  const { dom, api, w } = setup('usbank', html);
+  const current = api.adapter.currentCard();
+  assert.equal(current.id, 'cashback-deals:4321');
+  assert.equal(current.name, 'U.S. Bank Cash+ Visa Signature Card (...4321)');
+  assert.deepEqual(Array.from(current.legacyIds), ['cashback-deals']);
+  assert.equal(current.kind, 'card');
+  const modal = w.document.createElement('div');
+  modal.innerHTML = '<p>U.S. Bank Altitude Go Visa Card ending in 9876</p>';
+  assert.equal(api.adapter.detailCard(modal).id, 'cashback-deals:9876');
+  api.merge({ id: 'cashback-deals', name: 'Cash-back deals' }, [{ key: 'old', name: 'Old', status: 'added' }]);
+  api.merge({ id: 'cashback-deals', name: 'Cash-back deals' }, [{
+    key: 'merchant', name: 'Merchant A', status: 'addable', card: api.adapter.detailCard(modal)
+  }], true);
+  assert.deepEqual(Array.from(api.snapshot().cards, card => card.name), ['U.S. Bank Altitude Go Visa Card (...9876)']);
+  assert.equal(api.snapshot().offers.find(offer => offer.key === 'merchant').cards['cashback-deals:9876'], 'addable');
+  assert.equal(api.snapshot().offers.some(offer => offer.cards['cashback-deals']), false);
+  dom.window.close();
+});
 test('packaged scripts have independent identities, no remote library, no confirmation or resume-on-boot', () => {
   for (const name of ['CitiOffersAssistant', 'USBankOffersAssistant']) {
     const code = fs.readFileSync(path.join(base, `${name}.user.js`), 'utf8');
@@ -226,6 +246,7 @@ test('packaged scripts have independent identities, no remote library, no confir
     assert.match(code, /pointermove/);
     assert.match(code, /cardOffersHubSource\.\$\{config\.adapter\}\.v1/);
   }
+  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.7/);
 });
 
 test('an omitted card-offer record on rescan cannot make a partial offer fully added', () => {
