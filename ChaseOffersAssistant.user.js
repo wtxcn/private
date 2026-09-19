@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.16
+// @version      0.1.17
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -144,7 +144,7 @@
   }
 
   function isOffersPage(accountId = "") {
-    return /\/merchantOffers\/offerCategoriesPage/i.test(location.hash || location.href)
+    return /\/merchantOffers\/(?:offerCategoriesPage|offer-hub)(?:[?/#]|$)/i.test(location.hash || location.href)
       && (!accountId || currentAccountId() === String(accountId));
   }
 
@@ -189,8 +189,9 @@
       .filter((node) => !node.closest?.(`#${ID}`) && isVisible(node));
     const offers = [];
     for (const tile of tiles) {
-      const label = `${tile.getAttribute("aria-label") || ""} ${textOf(tile)}`.replace(/\s+/g, " ").trim();
-      if (!/\b(add offer|success added)\b/i.test(label)) continue;
+      const label = (tile.getAttribute("aria-label") || textOf(tile)).replace(/\s+/g, " ").trim();
+      const status = tileStatus(tile);
+      if (!status) continue;
       const name = displayOfferName(label);
       const key = normalizeOfferName(name);
       if (!key || key.length < 3) continue;
@@ -198,11 +199,88 @@
       offers.push({
         key,
         name,
-        status: /success added/i.test(label) ? "added" : "addable",
+        status,
         imageUrl: image?.currentSrc || image?.getAttribute?.("src") || ""
       });
     }
-    return offers;
+    const unique = new Map();
+    for (const offer of offers) {
+      const previous = unique.get(offer.key);
+      // Conflicting carousel/grid copies are not proof of enrollment.
+      if (previous && previous.status !== offer.status) offer.status = "unknown";
+      unique.set(offer.key, offer);
+    }
+    return [...unique.values()];
+  }
+
+  function tileStatus(tile) {
+    const label = `${tile.getAttribute("aria-label") || ""} ${textOf(tile)}`;
+    if (/success added/i.test(label) || tile.querySelector('[data-testid="offer-tile-alert-container-success"]')) return "added";
+    if (/\badd offer\b/i.test(label) || tile.querySelector('[data-testid="commerce-tile-button"]')) return "addable";
+    return "";
+  }
+
+  function accountPicker() {
+    const node = document.querySelector('[data-testid="select-credit-card-account"]');
+    return node && isVisible(node) ? node : null;
+  }
+
+  function pickerOptions() {
+    return Array.from(document.querySelectorAll('[role="option"][data-testid^="user-account-option-"]'))
+      .filter(node => isVisible(node) && node.getAttribute("aria-disabled") !== "true")
+      .filter(node => /\(\.\.\.\d{4}\)/.test(textOf(node)) && !/\b(?:checking|chk|savings|loan|mortgage)\b/i.test(textOf(node)));
+  }
+
+  async function showAccountPicker() {
+    const picker = accountPicker();
+    if (!picker || cancelRequested) return false;
+    if (picker.getAttribute("aria-expanded") !== "true") picker.click();
+    return waitFor(() => pickerOptions().length > 0);
+  }
+
+  async function openPickerCard(name) {
+    if (!await showAccountPicker() || cancelRequested) return null;
+    const option = pickerOptions().find(node => textOf(node) === name);
+    if (!option) return null;
+    const alreadySelected = option.getAttribute("aria-selected") === "true";
+    const previousId = currentAccountId();
+    const previousTiles = offerTiles();
+    option.click();
+    const loaded = await waitFor(() => {
+      const selected = textOf(accountPicker()) === name;
+      const changed = alreadySelected || (currentAccountId() !== previousId
+        && previousTiles.every(tile => !tile.isConnected));
+      return selected && changed && isOffersPage() && currentAccountId()
+        && (pageHasOfferError() || readOffersForCard().length > 0);
+    });
+    return loaded && !cancelRequested ? { id: currentAccountId(), name, pickerName: name } : null;
+  }
+
+  async function scanPickerCards() {
+    if (!await showAccountPicker()) throw new Error("Choose account did not load");
+    const names = [...new Set(pickerOptions().map(textOf))];
+    log(`Found ${names.length} card(s) in Choose account. Starting read-only scan.`);
+    let completed = 0;
+    for (const name of names) {
+      if (cancelRequested) break;
+      log(`Scanning ${completed + 1}/${names.length}: ${name}`);
+      const card = await openPickerCard(name);
+      if (!card || pageHasOfferError()) { log(`Skipped ${name}: Chase did not confirm this card's offers.`); continue; }
+      const offers = readOffersForCard();
+      if (!completed) { snapshot.cards = []; snapshot.offers = []; snapshot.selected = {}; cardFilter = ""; }
+      snapshot.cards.push(card);
+      mergeCardOffers(card, offers);
+      completed += 1;
+      saveSnapshot();
+      log(`${name}: ${offers.filter(offer => offer.status === "addable").length} addable, ${offers.filter(offer => offer.status === "added").length} added.`);
+    }
+    if (!completed) throw new Error("No card was scanned; previous saved results were retained");
+    if (!cancelRequested) {
+      snapshot.scannedAt = Date.now();
+      saveSnapshot();
+      publishHubSnapshot();
+      log(`Scan complete: ${completed}/${names.length} cards, ${snapshot.offers.length} unique offer(s).`);
+    }
   }
 
   function offerTiles() {
@@ -239,6 +317,10 @@
   }
 
   async function openOffers(card) {
+    if (card.pickerName && accountPicker()) {
+      const opened = await openPickerCard(card.pickerName);
+      return Boolean(opened && opened.id === card.id);
+    }
     const needsNavigation = !isOffersPage(card.id);
     // Chase updates the hash before React swaps the offer grid. Without this
     // guard, a scan can incorrectly read the previous card's visible tiles.
@@ -257,6 +339,10 @@
     cancelRequested = false;
     render();
     try {
+      if (isOffersPage() && accountPicker()) {
+        await scanPickerCards();
+        return;
+      }
       const ready = await openOverview();
       if (!ready) throw new Error("Account overview did not load");
       snapshot.cards = readCards();
@@ -346,8 +432,8 @@
     return Array.from(document.querySelectorAll('[data-testid="commerce-tile"]'))
       .filter((tile) => !tile.closest?.(`#${ID}`) && isVisible(tile))
       .find((tile) => {
-        const label = `${tile.getAttribute("aria-label") || ""} ${textOf(tile)}`;
-        return normalizeOfferName(label) === offer.key && /\badd offer\b/i.test(label);
+        const label = tile.getAttribute("aria-label") || textOf(tile);
+        return normalizeOfferName(label) === offer.key && tileStatus(tile) === "addable";
       });
   }
 
@@ -768,7 +854,7 @@
   }
 
   if (globalThis.__CHASE_ASSISTANT_TEST__) {
-    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, removeCardTasks, markCardUnavailable, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers, mount: () => { panel = makePanel(); render(); return panel; }, render, minimized: () => minimized };
+    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, removeCardTasks, markCardUnavailable, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers, isOffersPage, pickerOptions, openPickerCard, scanAllCards, findAddButton, mount: () => { panel = makePanel(); render(); return panel; }, render, minimized: () => minimized };
     return;
   }
 

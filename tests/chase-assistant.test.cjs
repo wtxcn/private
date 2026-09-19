@@ -37,6 +37,85 @@ function loadPanel(snapshot) {
   return { dom, w, api, panel };
 }
 
+test('both Chase Offers routes remain supported', () => {
+  const { dom, w, api } = loadPanel();
+  for (const route of ['offerCategoriesPage', 'offer-hub']) {
+    w.location.hash = `#/dashboard/merchantOffers/${route}?accountId=123`;
+    assert.equal(api.isOffersPage('123'), true);
+    assert.equal(api.isOffersPage('456'), false);
+  }
+  dom.window.close();
+});
+
+test('Chase hub recognizes icon-only add controls and deduplicates carousel copies', () => {
+  const { dom, w, api } = loadPanel();
+  w.document.body.insertAdjacentHTML('beforeend', `
+    <a data-testid="commerce-tile" aria-label="1 of 3 Merchant A 10% cash back">Merchant A 10% cash back<svg data-testid="commerce-tile-button"></svg></a>
+    <a data-testid="commerce-tile" aria-label="1 of 5 Merchant A 10% cash back Add Offer"></a>
+    <a data-testid="commerce-tile" aria-label="2 of 3 Merchant B $5 cash back 1 day left Success Added"></a>
+    <a data-testid="commerce-tile" aria-label="3 of 3 Merchant C 5% cash back"></a>`);
+  const offers = api.readOffersForCard();
+  assert.equal(offers.length, 2);
+  assert.equal(offers[0].status, 'addable');
+  assert.equal(offers[0].name, 'Merchant A 10% cash back');
+  assert.equal(offers[1].status, 'added');
+  assert.ok(api.findAddButton(offers[0]).querySelector('[data-testid="commerce-tile-button"]'));
+  dom.window.close();
+});
+
+function pickerFixture(stale = false) {
+  const fixture = loadPanel({ cards: [{ id: '999', name: 'Old card' }], offers: [], selected: {}, logs: [] });
+  const { w } = fixture;
+  let clock = Date.now();
+  w.Date.now = () => clock;
+  w.setTimeout = fn => { clock += 1000; queueMicrotask(fn); };
+  w.location.hash = '#/dashboard/merchantOffers/offer-hub?accountId=101';
+  w.document.body.insertAdjacentHTML('beforeend', `
+    <div role="button" data-testid="select-credit-card-account" aria-expanded="false">Test Card (...1111)</div>
+    <ul role="listbox" hidden>
+      <li role="option" data-testid="user-account-option-0" aria-selected="true">Test Card (...1111)</li>
+      <li role="option" data-testid="user-account-option-1" aria-selected="false">Test Card (...2222)</li>
+      <li role="option" data-testid="user-account-option-2">BUS COMPLETE CHK (...3333)</li>
+    </ul><div id="test-grid"></div>`);
+  const picker = w.document.querySelector('[data-testid="select-credit-card-account"]');
+  const menu = w.document.querySelector('[role="listbox"]');
+  const grid = w.document.querySelector('#test-grid');
+  const draw = index => { grid.innerHTML = `<a data-testid="commerce-tile" aria-label="1 of 1 Merchant ${index} 10% cash back"><svg data-testid="commerce-tile-button"></svg></a>`; };
+  draw(0);
+  picker.onclick = () => { menu.hidden = false; picker.setAttribute('aria-expanded', 'true'); };
+  [...menu.children].forEach((option, index) => {
+    option.onclick = () => {
+      picker.textContent = option.textContent;
+      picker.setAttribute('aria-expanded', 'false');
+      menu.hidden = true;
+      [...menu.children].forEach(e => e.setAttribute('aria-selected', String(e === option)));
+      w.location.hash = `#/dashboard/merchantOffers/offer-hub?accountId=${101 + index}`;
+      if (!stale) draw(index);
+    };
+  });
+  return fixture;
+}
+
+test('Chase picker scans current login cards read-only without overview or cached IDs', async () => {
+  const { dom, w, api } = pickerFixture();
+  let enrollments = 0;
+  w.document.querySelector('#test-grid').onclick = () => { enrollments++; };
+  await api.scanAllCards();
+  const snapshot = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+  assert.deepEqual(snapshot.cards.map(card => card.id), ['101', '102']);
+  assert.equal(snapshot.offers.length, 2);
+  assert.deepEqual(snapshot.offers.map(offer => Object.keys(offer.cards)), [['101'], ['102']]);
+  assert.equal(enrollments, 0);
+  assert.match(w.location.hash, /offer-hub/);
+  dom.window.close();
+});
+
+test('Chase picker rejects a changed label and URL while the previous grid remains', async () => {
+  const { dom, api } = pickerFixture(true);
+  assert.equal(await api.openPickerCard('Test Card (...2222)'), null);
+  dom.window.close();
+});
+
 test('normalizes Chase tile labels without merchant drift', () => {
   const { normalizeOfferName } = load();
   assert.equal(normalizeOfferName('12 of 113 Viator 8% cash back Add offer New'), 'viator 8% cash back');
@@ -135,7 +214,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.16/);
+  assert.match(source, /@version\s+0\.1\.17/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
