@@ -112,6 +112,19 @@ for (const bank of ['citi', 'usbank']) {
     w.eval(`createOffersAssistant(${JSON.stringify(config(bank))}, ${bank === 'citi' ? 'createCitiAdapter' : 'createUSBankAdapter'});`);
     const panel = w.document.querySelector(`#${bank}-offers-assistant`);
     const root = panel.shadowRoot;
+    assert.equal(panel.classList.contains('minimized'), true);
+    let captures = 0;
+    panel.setPointerCapture = () => { captures++; };
+    for (let i = 0; i < 3; i++) {
+      const restore = root.querySelector('[data-restore]');
+      restore.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, composed: true, button: 0 }));
+      restore.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true, composed: true, button: 0 }));
+      restore.click();
+      assert.equal(captures, 0);
+      assert.equal(panel.classList.contains('minimized'), false);
+      root.querySelector('[data-minimize]').click();
+      assert.equal(panel.classList.contains('minimized'), true);
+    }
     root.querySelector('[data-minimize]').click();
     assert.equal(panel.classList.contains('minimized'), true);
     const launcher = root.querySelector('[data-restore]');
@@ -265,7 +278,7 @@ test('packaged scripts have independent identities, no remote library, no confir
     assert.match(code, /pointermove/);
     assert.match(code, /cardOffersHubSource\.\$\{config\.adapter\}\.v1/);
   }
-  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.8/);
+  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.9/);
 });
 
 test('an omitted card-offer record on rescan cannot make a partial offer fully added', () => {

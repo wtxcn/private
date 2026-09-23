@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Amex Native Offer Clicker - Refresh Safe
 // @namespace    https://global.americanexpress.com/
-// @version      0.3.1
+// @version      0.3.2
 // @description  Adds Amex Offers by clicking the native Amex UI, with per-card refresh verification.
 // @match        https://global.americanexpress.com/*
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/AmexNativeOfferClicker.user.js
@@ -551,17 +551,23 @@
       pushLog(`Keep alive interval set to ${Math.max(1, minutes)} minute(s).`);
     });
     el.querySelector("[data-clear]").addEventListener("click", clearLogs);
-    el.querySelector("[data-hide]").addEventListener("click", () => {
+    const minimize = () => {
       el.style.display = "none";
       const tab = document.createElement("button");
+      tab.type = "button";
+      tab.setAttribute("data-amex-restore", "");
       tab.textContent = "Amex Offers";
       tab.style.cssText = "position:fixed;right:18px;top:92px;z-index:2147483647;padding:8px 10px;border-radius:6px;border:1px solid #0b5cab;background:#0b5cab;color:#fff;cursor:pointer";
-      tab.addEventListener("click", () => {
+      tab.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
         tab.remove();
         el.style.display = "block";
       });
       document.body.appendChild(tab);
-    });
+    };
+    el.querySelector("[data-hide]").addEventListener("click", minimize);
+    minimize();
 
     return el;
   }

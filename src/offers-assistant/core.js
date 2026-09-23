@@ -13,7 +13,7 @@ function createOffersAssistant(config, adapterFactory) {
   let scope = "";
   let query = "";
   let cardSummary = false;
-  let minimized = false;
+  let minimized = true;
   let dragState = null;
   let suppressLauncherClick = false;
   let snapshot = { cards: [], offers: [], selected: {}, logs: [], scannedAt: 0 };
@@ -320,19 +320,20 @@ function createOffersAssistant(config, adapterFactory) {
     if (origin.closest("button") && !origin.closest("[data-restore]")) return;
     const rect = panel.getBoundingClientRect();
     dragState = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, moved: false, launcher: Boolean(origin.closest("[data-restore]")) };
-    panel.setPointerCapture?.(event.pointerId);
   }
   function continueDrag(event) {
     if (!dragState || (dragState.pointerId !== undefined && event.pointerId !== undefined && event.pointerId !== dragState.pointerId)) return;
     if (Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) > 4) dragState.moved = true;
     if (!dragState.moved) return;
+    // Do not retarget ordinary launcher clicks to the shadow host.
+    panel.setPointerCapture?.(event.pointerId);
     event.preventDefault();
     movePanel(event.clientX, event.clientY);
   }
   function finishDrag(event) {
     if (!dragState || (dragState.pointerId !== undefined && event.pointerId !== undefined && event.pointerId !== dragState.pointerId)) return;
     suppressLauncherClick = dragState.moved && dragState.launcher;
-    panel.releasePointerCapture?.(event.pointerId);
+    if (panel.hasPointerCapture?.(event.pointerId)) panel.releasePointerCapture(event.pointerId);
     dragState = null;
   }
   function render() {
@@ -382,6 +383,17 @@ function createOffersAssistant(config, adapterFactory) {
       .list{display:flex;flex-direction:column;gap:8px;padding:12px 16px}.offer{border:1px solid #e1e5eb;border-radius:8px;background:white;padding:14px;cursor:pointer}.offer.selected{border-color:#0874cf;box-shadow:inset 0 0 0 1px #0874cf}.offer-head{display:flex;align-items:center;gap:12px;background:transparent;padding:0;border:0;width:100%;text-align:left}.offer-head:disabled{opacity:1}.logo{display:grid;place-items:center;width:64px;height:50px;flex:none;overflow:hidden}.logo img{width:100%;height:100%;object-fit:contain}.initials{display:grid;place-items:center;width:42px;height:42px;background:#e9f2fb;border-radius:8px;color:#2767a3}.offer-main{min-width:0;flex:1}.offer-main strong{display:block;font-size:17px;font-weight:800;color:#071f52;overflow-wrap:anywhere}.description,.meta{display:block;color:#697586;font-size:12px}.green{display:block;color:#28784f}.count{text-align:right;min-width:54px;flex:none;font-weight:700;font-size:15px}.count small{display:block;color:#697586;font-size:10px}.cards{margin-top:10px}.card{max-width:100%;font-size:11px}.card.added{color:#28784f;border-color:#76c59a;background:#eaf7ef;opacity:1;text-decoration:none;font-weight:700}.card.unknown{color:#8b5315;border-color:#d8b067;background:#fff8e9;opacity:1}.summary{display:flex;justify-content:space-between;gap:12px;text-align:left}.summary span{color:#697586}.empty{padding:24px;text-align:center;color:#697586}.status{padding:0 16px 10px;overflow-wrap:anywhere}.time{color:#697586;font-size:11px}details{margin:0 16px 14px}summary{cursor:pointer;color:#697586}pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:140px;overflow:auto;background:#eff2f6;padding:8px;font:11px/1.4 monospace}.footer{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:10px 16px;background:white;border-top:1px solid #e4e7ed;flex:none}
       @media(max-width:480px){:host{top:12px;right:8px;width:calc(100vw - 16px)}.panel{max-height:calc(100dvh - 24px)}.stats{grid-template-columns:repeat(3,minmax(0,1fr))}.logo{width:44px;height:44px}.offer-head{gap:8px}.list{padding:10px}.offer{padding:10px}.summary{flex-direction:column}.controls{padding:10px}}
       </style><button class="launcher" data-restore title="Restore ${escape(config.name)}" aria-label="Restore ${escape(config.name)}">${config.icons.card}${escape(config.name.replace(/ Assistant$/, ""))}</button><div class="panel"><header data-drag-handle><span class="brand-icon">${config.icons.card}</span><div class="brand"><strong>${escape(config.name)}</strong><span class="sub" data-total></span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${config.icons.collapse}</button></header><div class="body"><div class="controls"><div class="actions"><button data-scan>${escape(config.scanLabel)}</button>${config.cardMode ? '<button data-current>Scan current card</button>' : ""}<button data-select>Select visible</button><button data-clear>Clear selection</button><button class="danger" data-stop>Stop</button></div><label class="search">${config.icons.search}<input type="search" data-search aria-label="Search merchants or offers" placeholder="Search merchants or offers"></label><div class="stats" data-stats></div><div class="scopes" data-scopes></div></div><section class="list" data-list></section><details><summary>Activity</summary><pre data-log></pre></details></div><div class="footer"><div><div data-status></div><div class="time" data-time></div></div><button class="primary" data-add>Add selected (0)</button><button class="icon" data-forget title="Clear local offer cache" aria-label="Clear local offer cache">${config.icons.trash}</button></div></div>`;
+    setMinimized(minimized);
+    root.querySelectorAll('[data-restore], [data-minimize]').forEach(button => { button.type = 'button'; });
+    root.addEventListener("click", event => {
+      const button = event.target.closest?.('[data-restore], [data-minimize]');
+      if (!button) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (button.hasAttribute('data-minimize')) setMinimized(true);
+      else if (suppressLauncherClick) suppressLauncherClick = false;
+      else setMinimized(false);
+    }, true);
     document.body.appendChild(panel);
     panel.addEventListener("pointerdown", startDrag);
     panel.addEventListener("pointermove", continueDrag);
@@ -404,8 +416,6 @@ function createOffersAssistant(config, adapterFactory) {
       else if ("current" in data) void scan(true);
       else if ("add" in data) void addSelected();
       else if ("stop" in data) stop();
-      else if ("minimize" in data) setMinimized(true);
-      else if ("restore" in data) { if (suppressLauncherClick) suppressLauncherClick = false; else setMinimized(false); }
       else if ("filter" in data) { filter = data.filter; cardSummary = false; render(); }
       else if ("scope" in data) { scope = data.scope; cardSummary = false; render(); }
       else if ("summary" in data) { cardSummary = true; render(); }

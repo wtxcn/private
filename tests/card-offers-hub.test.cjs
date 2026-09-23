@@ -28,6 +28,28 @@ function chaseSource(name, cardId, publishedAt) {
   } };
 }
 
+test('Hub starts minimized and restores repeatedly without capturing launcher clicks', () => {
+  const { dom, w, api } = setup();
+  const panel = api.mount();
+  const root = panel.shadowRoot;
+  let captures = 0;
+  panel.setPointerCapture = () => { captures++; };
+  assert.equal(panel.classList.contains('minimized'), true);
+  for (let i = 0; i < 3; i++) {
+    const launcher = root.querySelector('[data-restore]');
+    launcher.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, composed: true, button: 0 }));
+    launcher.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true, composed: true, button: 0 }));
+    launcher.click();
+    assert.equal(captures, 0);
+    assert.equal(panel.classList.contains('minimized'), false);
+    root.querySelector('[data-minimize]').click();
+    api.render();
+    assert.equal(panel.classList.contains('minimized'), true);
+  }
+  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.11');
+  dom.window.close();
+});
+
 test('Hub merges repeated bank scans by card and hashes source card IDs', () => {
   const { dom, w, api } = setup();
   w.localStorage.setItem('cardOffersHubSource.chase.v1', JSON.stringify(chaseSource('Freedom', '123456789', 1000)));
@@ -233,7 +255,7 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.10/);
+  assert.match(source, /@version\s+0\.1\.11/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);
