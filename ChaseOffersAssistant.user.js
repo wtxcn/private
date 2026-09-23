@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.17
+// @version      0.1.18
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -30,7 +30,7 @@
   let viewFilter = "all";
   let cardFilter = "";
   let cardSummaryMode = false;
-  let minimized = false;
+  let minimized = true;
   let dragState = null;
   let suppressLauncherClick = false;
   let snapshot = loadSnapshot();
@@ -634,13 +634,14 @@
     if (origin.closest("button") && !origin.closest("[data-restore]")) return;
     const rect = panel.getBoundingClientRect();
     dragState = { pointerId: event.pointerId, offsetX: event.clientX - rect.left, offsetY: event.clientY - rect.top, startX: event.clientX, startY: event.clientY, moved: false, launcher: Boolean(origin.closest("[data-restore]")) };
-    panel.setPointerCapture?.(event.pointerId);
   }
 
   function continuePanelDrag(event) {
     if (!dragState || (dragState.pointerId !== undefined && event.pointerId !== undefined && event.pointerId !== dragState.pointerId)) return;
     if (Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) > 4) dragState.moved = true;
     if (!dragState.moved) return;
+    // Capture only actual drags so a launcher click keeps its button target.
+    panel.setPointerCapture?.(event.pointerId);
     event.preventDefault();
     movePanel(event.clientX, event.clientY);
   }
@@ -648,24 +649,29 @@
   function finishPanelDrag(event) {
     if (!dragState || (dragState.pointerId !== undefined && event.pointerId !== undefined && event.pointerId !== dragState.pointerId)) return;
     suppressLauncherClick = dragState.moved && dragState.launcher;
-    panel.releasePointerCapture?.(event.pointerId);
+    if (panel.hasPointerCapture?.(event.pointerId)) panel.releasePointerCapture(event.pointerId);
     dragState = null;
   }
 
   function makePanel() {
     const element = document.createElement("aside");
     element.id = ID;
+    element.classList.toggle("minimized", minimized);
     element.addEventListener("pointerdown", startPanelDrag);
     element.addEventListener("pointermove", continuePanelDrag);
     element.addEventListener("pointerup", finishPanelDrag);
     element.addEventListener("pointercancel", finishPanelDrag);
     element.addEventListener("click", (event) => {
-      if (event.target.closest("[data-minimize]")) setMinimized(true);
-      else if (event.target.closest("[data-restore]")) {
+      const origin = event.composedPath?.()[0] || event.target;
+      if (!origin?.closest?.("[data-minimize], [data-restore]")) return;
+      event.preventDefault();
+      event.stopPropagation();
+      if (origin.closest("[data-minimize]")) setMinimized(true);
+      else {
         if (suppressLauncherClick) suppressLauncherClick = false;
         else setMinimized(false);
       }
-    });
+    }, true);
     document.body.appendChild(element);
     return element;
   }
@@ -790,9 +796,9 @@
         #${ID} .logs { max-height:110px; overflow:auto; margin-bottom:10px; padding:8px; border-radius:5px; background:#102746; color:#d9eafb; white-space:pre-wrap; font:11px/1.35 ui-monospace,SFMono-Regular,Menlo,monospace; }
         @media (max-width:560px) { #${ID} { right:8px; width:calc(100vw - 16px); } #${ID} .stats { grid-template-columns:repeat(2,minmax(0,1fr)); } #${ID} .actions button { flex:1 1 auto; } }
       </style>
-      <button class="launcher" data-restore title="Restore Chase Offers" aria-label="Restore Chase Offers">Chase Offers</button>
+      <button type="button" class="launcher" data-restore title="Restore Chase Offers" aria-label="Restore Chase Offers">Chase Offers</button>
       <div class="panel-shell">
-      <header data-drag-handle><div class="brand-wrap"><div class="brand-mark" aria-hidden="true"><span class="brand-card"></span><span class="brand-plus">+</span></div><div><div class="brand">Chase Offers</div><div class="subbrand">Offers: ${snapshot.offers.length} · Cards: ${snapshot.cards.length}</div></div></div><div class="header-actions"><span class="run-state">${mode}</span><button class="minimize" data-minimize title="Minimize" aria-label="Minimize">&minus;</button></div></header>
+      <header data-drag-handle><div class="brand-wrap"><div class="brand-mark" aria-hidden="true"><span class="brand-card"></span><span class="brand-plus">+</span></div><div><div class="brand">Chase Offers</div><div class="subbrand">Offers: ${snapshot.offers.length} · Cards: ${snapshot.cards.length}</div></div></div><div class="header-actions"><span class="run-state">${mode}</span><button type="button" class="minimize" data-minimize title="Minimize" aria-label="Minimize">&minus;</button></div></header>
       <main>
         <div class="controls">
           <div class="actions">

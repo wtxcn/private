@@ -214,7 +214,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.17/);
+  assert.match(source, /@version\s+0\.1\.18/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
@@ -228,11 +228,39 @@ test('the assistant panel uses the refreshed logo, system font, and offer-state 
   assert.match(source, /publishHubSnapshot\(\)/);
 });
 
+test('Chase panel starts minimized and supports repeated restore/minimize without pointer capture', () => {
+  const { dom, w, api, panel } = loadPanel();
+  let captures = 0;
+  panel.setPointerCapture = () => { captures++; };
+  assert.equal(api.minimized(), true);
+  assert.equal(w.getComputedStyle(panel.querySelector('.panel-shell')).display, 'none');
+  assert.equal(w.getComputedStyle(panel.querySelector('.launcher')).display, 'flex');
+  for (let i = 0; i < 3; i++) {
+    const launcher = panel.querySelector('[data-restore]');
+    launcher.dispatchEvent(new w.MouseEvent('pointerdown', { bubbles: true, button: 0 }));
+    launcher.dispatchEvent(new w.MouseEvent('pointerup', { bubbles: true, button: 0 }));
+    launcher.click();
+    assert.equal(captures, 0);
+    assert.equal(api.minimized(), false);
+    assert.equal(w.getComputedStyle(panel.querySelector('.panel-shell')).display, 'flex');
+    const minimize = panel.querySelector('[data-minimize]');
+    minimize.addEventListener('click', (event) => event.stopPropagation());
+    minimize.click();
+    assert.equal(api.minimized(), true);
+    api.render();
+    assert.equal(w.getComputedStyle(panel.querySelector('.panel-shell')).display, 'none');
+  }
+  assert.equal(panel.querySelector('.run-state').textContent, 'Ready');
+  dom.window.close();
+});
+
 test('Chase panel minimizes to a movable launcher and stays minimized across renders', () => {
   const snapshot = { cards: [{ id: 'a', name: 'Card A' }], offers: [
     { key: 'offer', name: 'Merchant', cards: { a: 'addable' } }
   ], selected: {}, scannedAt: 0, logs: [] };
   const { dom, w, api, panel } = loadPanel(snapshot);
+  panel.querySelector('[data-restore]').click();
+  assert.equal(api.minimized(), false);
   panel.querySelector('[data-minimize]').click();
   assert.equal(api.minimized(), true);
   api.toggleOfferSelection('offer');
