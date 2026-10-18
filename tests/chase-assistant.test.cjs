@@ -116,6 +116,69 @@ test('Chase picker rejects a changed label and URL while the previous grid remai
   dom.window.close();
 });
 
+test('adding continues across cards after enrollment removes the account picker', async () => {
+  const { dom, w, api } = pickerFixture();
+  await api.scanAllCards();
+  api.toggleOfferSelection('merchant 0 10% cash back');
+  api.toggleOfferSelection('merchant 1 10% cash back');
+  const queue = w.__CHASE_ASSISTANT_TEST__.queue;
+  const picker = w.document.querySelector('[data-testid="select-credit-card-account"]');
+  const grid = w.document.querySelector('#test-grid');
+  const enrollments = [];
+  const timer = w.setTimeout;
+  w.setTimeout = fn => timer(() => {
+    if (w.location.hash.includes('/offer-hub?') && !picker.isConnected) w.document.body.append(picker);
+    fn();
+  });
+  grid.onclick = event => {
+    const tile = event.target.closest('[data-testid="commerce-tile"]');
+    if (!tile) return;
+    const id = w.location.hash.match(/accountId=(\d+)/)[1];
+    enrollments.push(id);
+    tile.setAttribute('aria-label', tile.getAttribute('aria-label') + ' Success Added');
+    tile.querySelector('svg')?.remove();
+    picker.remove();
+    w.location.hash = `#/dashboard/merchantOffers/offerCategoriesPage?accountId=${id}&offerCategoryName=ALL`;
+  };
+  await queue.addSelectedOffers();
+  assert.deepEqual(enrollments, ['101', '102']);
+  const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+  assert.ok(saved.offers.every(offer => Object.values(offer.cards).every(status => status === 'added')));
+  assert.ok(saved.logs.some(line => line.includes('Finished all selected offers.')));
+  assert.equal(api.selectedTasks().length, 0);
+  assert.equal(api.loadAddRun(), null);
+  dom.window.close();
+});
+
+test('picker recovery never enrolls when the hub fails to restore, and Stop cancels recovery', async () => {
+  for (const stop of [false, true]) {
+    const { dom, w, api } = pickerFixture();
+    const queue = w.__CHASE_ASSISTANT_TEST__.queue;
+    w.document.querySelector('[data-testid="select-credit-card-account"]').remove();
+    w.location.hash = '#/dashboard/merchantOffers/offerCategoriesPage?accountId=101&offerCategoryName=ALL';
+    let clicks = 0;
+    w.document.querySelector('#test-grid').onclick = () => clicks++;
+    if (stop) queueMicrotask(() => queue.stopCurrentRun());
+    assert.equal(await queue.openOffers({ id: '102', pickerName: 'Test Card (...2222)' }), false);
+    assert.match(w.location.hash, /offer-hub\?accountId=101$/);
+    assert.equal(clicks, 0);
+    assert.equal(api.loadAddRun(), null);
+    dom.window.close();
+  }
+});
+
+test('current picker card stays on its category grid and legacy category routing remains usable', async () => {
+  const { dom, w } = pickerFixture();
+  const queue = w.__CHASE_ASSISTANT_TEST__.queue;
+  w.document.querySelector('[data-testid="select-credit-card-account"]').remove();
+  w.location.hash = '#/dashboard/merchantOffers/offerCategoriesPage?accountId=101&offerCategoryName=ALL';
+  const route = w.location.hash;
+  assert.equal(await queue.openOffers({ id: '101', pickerName: 'Test Card (...1111)' }), true);
+  assert.equal(await queue.openOffers({ id: '101', name: 'Legacy card' }), true);
+  assert.equal(w.location.hash, route);
+  dom.window.close();
+});
+
 test('normalizes Chase tile labels without merchant drift', () => {
   const { normalizeOfferName } = load();
   assert.equal(normalizeOfferName('12 of 113 Viator 8% cash back Add offer New'), 'viator 8% cash back');
@@ -214,7 +277,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.18/);
+  assert.match(source, /@version\s+0\.1\.19/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);

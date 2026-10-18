@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.18
+// @version      0.1.19
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -317,7 +317,17 @@
   }
 
   async function openOffers(card) {
-    if (card.pickerName && accountPicker()) {
+    if (cancelRequested) return false;
+    if (card.pickerName) {
+      // Adding can leave us on the category page, which has no account picker.
+      // Stay on a verified current card, otherwise restore its hub before switching.
+      if (isOffersPage(card.id) && readOffersForCard().length > 0) return true;
+      if (!accountPicker()) {
+        const currentId = currentAccountId();
+        if (!currentId) return false;
+        location.assign(`https://secure.chase.com/web/auth/dashboard#/dashboard/merchantOffers/offer-hub?accountId=${encodeURIComponent(currentId)}`);
+        if (!await waitFor(() => accountPicker() && isOffersPage(currentId))) return false;
+      }
       const opened = await openPickerCard(card.pickerName);
       return Boolean(opened && opened.id === card.id);
     }
@@ -860,6 +870,7 @@
   }
 
   if (globalThis.__CHASE_ASSISTANT_TEST__) {
+    globalThis.__CHASE_ASSISTANT_TEST__.queue = { openOffers, addSelectedOffers, stopCurrentRun };
     globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, removeCardTasks, markCardUnavailable, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers, isOffersPage, pickerOptions, openPickerCard, scanAllCards, findAddButton, mount: () => { panel = makePanel(); render(); return panel; }, render, minimized: () => minimized };
     return;
   }
