@@ -6,6 +6,13 @@ const path = require('node:path');
 const { JSDOM } = require('jsdom');
 const { startServer } = require('../local-offer-server/server.cjs');
 
+test('server preserves per-card scan ages instead of the latest bank timestamp', () => {
+  const { sanitizeData } = require('../local-offer-server/server.cjs');
+  const data = sanitizeData({ snapshots: { chase: { bank: 'chase', scannedAt: 200,
+    cards: [{ id: 'a', name: 'Card A', scannedAt: 100 }, { id: 'b', name: 'Card B', scannedAt: 200 }], offers: [] } } });
+  assert.deepEqual(data.snapshots.chase.cards.map(card => card.scannedAt), [100, 200]);
+});
+
 test('local Offer Server pairs only locally, sanitizes uploads and protects reads', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'card-offers-server-'));
   const { servers, port } = await startServer({ host: '127.0.0.1', port: 0, dataDir });

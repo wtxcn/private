@@ -1,6 +1,15 @@
 const fs = require('node:fs');
 const path = require('node:path');
 const root = path.resolve(__dirname, '..');
+const hubPath = path.join(root, 'CardOffersHub.user.js');
+const hub = fs.readFileSync(hubPath, 'utf8');
+const amexNormalization = fs.readFileSync(path.join(root, 'local-offer-server/amex-offers.cjs'), 'utf8')
+  .replace(/module\.exports = \{ normalizeAmexOffers \};\s*$/, '').trimEnd();
+const hubOutput = hub.replace(/\/\/ BEGIN AMEX NORMALIZATION[\s\S]*?\/\/ END AMEX NORMALIZATION/,
+  () => '// BEGIN AMEX NORMALIZATION\n' + amexNormalization + '\n// END AMEX NORMALIZATION');
+if (process.argv.includes('--check')) {
+  if (hubOutput !== hub) throw new Error('Rebuild CardOffersHub.user.js');
+} else fs.writeFileSync(hubPath, hubOutput);
 const sourceDir = path.join(root, 'src/offers-assistant');
 const core = fs.readFileSync(path.join(sourceDir, 'core.js'), 'utf8');
 const iconLicense = fs.readFileSync(path.join(sourceDir, 'ICON-LICENSE.txt'), 'utf8');

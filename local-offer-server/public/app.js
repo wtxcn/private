@@ -35,7 +35,7 @@
       const cards = new Map(snapshot.cards.map(card => [card.id, card]));
       for (const offer of snapshot.offers) {
         for (const [cardId, status] of Object.entries(offer.cards)) {
-          output.push({ bank: snapshot.bank, card: cards.get(cardId)?.name || 'Card', status, name: offer.name, description: offer.description || '', scannedAt: snapshot.scannedAt });
+          output.push({ bank: snapshot.bank, card: cards.get(cardId)?.name || 'Card', status, name: offer.name, description: offer.description || '', scannedAt: cards.get(cardId)?.scannedAt || snapshot.scannedAt });
         }
       }
     }

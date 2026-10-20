@@ -28,6 +28,26 @@ function chaseSource(name, cardId, publishedAt) {
   } };
 }
 
+test('complete per-card scans replace vanished offers without deleting another login or refreshing its age', () => {
+  const { dom, api } = setup();
+  const old = { bank: 'chase', scannedAt: 100, cards: [{ id: 'a', name: 'P1 card' }, { id: 'b', name: 'P2 card' }],
+    offers: [{ key: 'google', name: 'Google Play', cards: { a: 'added', b: 'added' } }] };
+  const fresh = { bank: 'chase', scannedAt: 200, cards: [{ id: 'a', name: 'P1 card', scannedAt: 200, complete: true }], offers: [] };
+  const merged = api.mergeSnapshots(old, fresh);
+  assert.deepEqual(Object.keys(merged.offers[0].cards), ['b']);
+  assert.equal(merged.cards.find(c => c.id === 'b').scannedAt, 100);
+  assert.equal(merged.cards.find(c => c.id === 'a').scannedAt, 200);
+  const replay = api.mergeSnapshots(merged, old);
+  assert.deepEqual(Object.keys(replay.offers[0].cards), ['b']);
+  const cleared = api.mergeSnapshots(merged, { ...fresh, cards: [{ id: 'b', name: 'P2 card', scannedAt: 200, complete: true }] });
+  assert.equal(cleared.offers.length, 0);
+  for (const complete of [false, undefined]) {
+    const partial = api.mergeSnapshots(old, { ...fresh, cards: [{ id: 'a', name: 'P1 card', complete }] });
+    assert.deepEqual(Object.keys(partial.offers[0].cards), ['a', 'b']);
+  }
+  dom.window.close();
+});
+
 test('Hub starts minimized and restores repeatedly without capturing launcher clicks', () => {
   const { dom, w, api } = setup();
   const panel = api.mount();
@@ -46,7 +66,7 @@ test('Hub starts minimized and restores repeatedly without capturing launcher cl
     api.render();
     assert.equal(panel.classList.contains('minimized'), true);
   }
-  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.11');
+  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.13');
   dom.window.close();
 });
 
@@ -225,6 +245,54 @@ test('Hub captures visible Amex addable offers without storing opaque account ID
   dom.window.close();
 });
 
+test('Hub migrates Amex duplicates and retains the other account during subsequent scans', () => {
+  const { dom, values, api } = setup('https://global.americanexpress.com/offers');
+  const terms = 'Spend $250 or more, earn $25 back';
+  const offer = (key, description, cards) => ({ key, name: 'Best Buy', description, cards });
+  values.set('cardOffersHub.data.v1', { version: 2, snapshots: { amex: {
+    bank: 'amex', scannedAt: 100, cards: [{ id: 'a', name: 'Card A' }, { id: 'b', name: 'Card B' }],
+    offers: [offer('old1', terms, { a: 'addable', b: 'addable' }),
+      offer('old2', `${terms} ${terms} Your offer has been added`, { a: 'addable' })]
+  } } });
+  const old = api.getData().snapshots.amex;
+  assert.equal(old.offers.length, 1);
+  assert.equal(old.offers[0].cards.a, 'added');
+  const merged = api.mergeSnapshots(old, { bank: 'amex', scannedAt: 200,
+    cards: [{ id: 'a', name: 'Card A' }],
+    offers: [offer('new', `${terms} 12/31/2026 Add to Card`, { a: 'addable' }),
+      offer('cash', 'Get $10 back', { a: 'addable' }),
+      offer('percent', 'Get 10% back', { a: 'addable' })] });
+  assert.equal(merged.offers.length, 3);
+  const combined = merged.offers.find(item => item.description.startsWith('Spend'));
+  assert.deepEqual({ ...combined.cards }, { a: 'added', b: 'addable' });
+  assert.equal(combined.description, `${terms} Expires 12/31/2026`);
+  assert.equal(merged.cards.find(card => card.id === 'b').scannedAt, 100);
+  dom.window.close();
+});
+
+test('Amex UI transitions do not create duplicates or regress an added status', () => {
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers');
+  const terms = 'Spend $250 or more, earn $25 back';
+  const render = content => {
+    w.document.body.innerHTML = `<div data-testid="simple_switcher_wrapper">Test Card (...10001)</div>
+      <div id="offer-best-buy"><h3>Best Buy</h3> ${content}</div>`;
+    api.syncCurrentBank(true);
+  };
+  render(`<span>${terms}</span> <span>12/31/2026</span> <button title="add to list card">Add to Card</button>`);
+  assert.equal(api.placements().length, 1);
+  assert.equal(api.placements()[0].status, 'addable');
+  render(`<span>${terms}</span> <span>12/31/2026</span> <button>View Details</button> Details Earn a one-time $25 statement credit.`);
+  assert.equal(api.placements().length, 1);
+  render(`<span>${terms}</span> Your offer has been added. Remember to use your enrolled Card. <button>Redeem Now</button>`);
+  assert.equal(api.placements().length, 1);
+  assert.equal(api.placements()[0].status, 'added');
+  render(`<span>${terms}</span> <span>12/31/2026</span> <button title="add to list card">Add to Card</button>`);
+  assert.equal(api.placements().length, 1);
+  assert.equal(api.placements()[0].status, 'added');
+  assert.equal(api.placements()[0].description, `${terms} Expires 12/31/2026`);
+  dom.window.close();
+});
+
 test('Hub captures added Amex offers directly from the dashboard', () => {
   const html = '<div role="combobox" aria-label="Open to manage your other accounts">Marriott Card ••••11005</div><input id="ENROLLED" type="radio" checked><div id="offer-valentino"><button id="header-panel-valentino"><img alt="Valentino - Luxury Fashion & Accessories">Spend $1,100 or more, earn $220 back Valentino - Luxury Fashion & Accessories Expires today</button><span>Added to Card ••••11005</span></div>';
   const { dom, w, api } = setup('https://global.americanexpress.com/dashboard');
@@ -255,7 +323,7 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.11/);
+  assert.match(source, /@version\s+0\.1\.13/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);

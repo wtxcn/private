@@ -5,6 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const os = require('node:os');
 const crypto = require('node:crypto');
+const { normalizeAmexOffers } = require('./amex-offers.cjs');
 
 const BANKS = new Set(['chase', 'citi', 'usbank', 'amex']);
 const STATUSES = new Set(['addable', 'added', 'unknown']);
@@ -34,7 +35,7 @@ function sanitizeData(value) {
       const id = cleanText(card?.id, 100);
       if (!id || cardIds.has(id)) continue;
       cardIds.add(id);
-      cards.push({ id, name: safeCardName(card?.name) });
+      cards.push({ id, name: safeCardName(card?.name), scannedAt: Number(card.scannedAt) || Number(source.scannedAt) || 0 });
     }
     const offers = [];
     for (const offer of source.offers.slice(0, 5000)) {
@@ -55,7 +56,7 @@ function sanitizeData(value) {
     snapshots[bank] = {
       bank,
       cards,
-      offers,
+      offers: bank === 'amex' ? normalizeAmexOffers(offers) : offers,
       scannedAt: Number(source.scannedAt) || 0,
       publishedAt: Number(source.publishedAt) || 0
     };

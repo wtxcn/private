@@ -16,6 +16,7 @@ fi
 
 mkdir -p "$APP_DIR/public" "$LAUNCH_AGENTS"
 cp "$SOURCE_DIR/server.cjs" "$APP_DIR/server.cjs"
+cp "$SOURCE_DIR/amex-offers.cjs" "$APP_DIR/amex-offers.cjs"
 cp "$SOURCE_DIR/public/index.html" "$APP_DIR/public/index.html"
 cp "$SOURCE_DIR/public/app.js" "$APP_DIR/public/app.js"
 cp "$SOURCE_DIR/public/styles.css" "$APP_DIR/public/styles.css"

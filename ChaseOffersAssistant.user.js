@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.19
+// @version      0.1.20
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -55,7 +55,7 @@
     if (!snapshot.scannedAt) return;
     try {
       const clean = {
-        cards: snapshot.cards.map(({ id, name }) => ({ id, name })),
+        cards: snapshot.cards.map(({ id, name, scannedAt, complete }) => ({ id, name, scannedAt, complete })),
         offers: snapshot.offers.map(({ key, name, imageUrl = "", cards }) => ({ key, name, imageUrl, cards: { ...cards } })),
         scannedAt: snapshot.scannedAt
       };
@@ -239,6 +239,10 @@
   }
 
   async function openPickerCard(name) {
+    if (!accountPicker() && currentAccountId()) {
+      location.assign(`https://secure.chase.com/web/auth/dashboard#/dashboard/merchantOffers/offer-hub?accountId=${encodeURIComponent(currentAccountId())}`);
+      if (!await waitFor(() => accountPicker())) return null;
+    }
     if (!await showAccountPicker() || cancelRequested) return null;
     const option = pickerOptions().find(node => textOf(node) === name);
     if (!option) return null;
@@ -266,9 +270,12 @@
       log(`Scanning ${completed + 1}/${names.length}: ${name}`);
       const card = await openPickerCard(name);
       if (!card || pageHasOfferError()) { log(`Skipped ${name}: Chase did not confirm this card's offers.`); continue; }
+      if (!await loadCompleteOffers(card)) { log(`Skipped ${name}: full offer list was not confirmed.`); continue; }
       const offers = readOffersForCard();
       if (!completed) { snapshot.cards = []; snapshot.offers = []; snapshot.selected = {}; cardFilter = ""; }
       snapshot.cards.push(card);
+      card.scannedAt = Date.now();
+      card.complete = true;
       mergeCardOffers(card, offers);
       completed += 1;
       saveSnapshot();
@@ -286,6 +293,22 @@
   function offerTiles() {
     return Array.from(document.querySelectorAll('[data-testid="commerce-tile"]'))
       .filter((tile) => !tile.closest?.(`#${ID}`) && isVisible(tile));
+  }
+
+  async function loadCompleteOffers(card) {
+    const previous = offerTiles();
+    // A fresh, unfiltered ALL route is required before absence can remove data.
+    location.assign(offerHubUrl(card.id));
+    return waitFor(() => !pageHasOfferError() && isOffersPage(card.id)
+      && /offerCategoriesPage.*offerCategoryName=ALL/.test(location.hash)
+      && previous.every(tile => !tile.isConnected) && hasCompleteOfferCount());
+  }
+
+  function hasCompleteOfferCount() {
+    const heading = Array.from(document.querySelectorAll('h2, [role="heading"]'))
+      .find(node => !node.closest?.(`#${ID}`) && isVisible(node) && /\b\d+\s+results\b/i.test(textOf(node)));
+    const count = textOf(heading).match(/\b(\d+)\s+results\b/i)?.[1];
+    return count !== undefined && Number(count) === readOffersForCard().length;
   }
 
   function mergeCardOffers(card, cardOffers) {
@@ -355,7 +378,7 @@
       }
       const ready = await openOverview();
       if (!ready) throw new Error("Account overview did not load");
-      snapshot.cards = readCards();
+      snapshot.cards = readCards().map(card => ({ ...card, scannedAt: 0, complete: false }));
       snapshot.offers = [];
       snapshot.selected = {};
       saveSnapshot();
@@ -371,6 +394,8 @@
         }
         const offers = readOffersForCard();
         mergeCardOffers(card, offers);
+        card.scannedAt = Date.now();
+        card.complete = /offerCategoriesPage.*offerCategoryName=ALL/.test(location.hash) && hasCompleteOfferCount();
         saveSnapshot();
         log(`${card.name}: ${offers.filter((offer) => offer.status === "addable").length} addable, ${offers.filter((offer) => offer.status === "added").length} added.`);
       }

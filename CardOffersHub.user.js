@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Card Offers Hub
 // @namespace    https://github.com/wtxcn/private
-// @version      0.1.11
+// @version      0.1.13
 // @description  Combine card-offer snapshots from supported banks into one private local search hub.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -21,6 +21,57 @@
 
 (function () {
   "use strict";
+
+// BEGIN AMEX NORMALIZATION
+function normalizeAmexOffers(offers) {
+  const text = value => String(value || '').replace(/\s+/g, ' ').trim();
+  const keyOf = value => text(value).normalize('NFKD').replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+  const candidates = offers.map(offer => {
+    const original = text(offer.description);
+    const date = original.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/);
+    const expiry = date && Number(date[1]) <= 12 && Number(date[2]) <= 31
+      ? `${date[3].length === 2 ? '20' : ''}${date[3]}-${date[1].padStart(2, '0')}-${date[2].padStart(2, '0')}` : '';
+    let description = original
+      .split(/\b(?:Your offer has been added|Remember to use your enrolled|Add to Card|Added to Card|Redeem Now|View Details|Card Details|Terms apply|Details)\b/i)[0]
+      .replace(/(?:Expires?\s*)?\b\d{1,2}\/\d{1,2}\/(?:\d{4}|\d{2})\b/ig, ' ');
+    description = text(description);
+    // The old collector concatenated a button's text with its parent's text.
+    let repeated;
+    while ((repeated = description.match(/^(.+?)\s+\1$/i))) description = repeated[1];
+    const base = /[$%]|\b\d[\d,]*\s+(?:points|miles)\b/i.test(description)
+      ? `amex|${keyOf(offer.name)}|${description.normalize('NFKC').toLowerCase()}` : null;
+    const cards = { ...offer.cards };
+    if (/\bYour offer has been added\b/i.test(original)) {
+      for (const id of Object.keys(cards)) cards[id] = 'added';
+    }
+    return { ...offer, description, cards, base, expiry };
+  });
+  const dates = new Map();
+  for (const item of candidates) {
+    if (!dates.has(item.base)) dates.set(item.base, new Set());
+    if (item.expiry) dates.get(item.base).add(item.expiry);
+  }
+  const merged = new Map();
+  for (const item of candidates) {
+    // Date-less legacy copies can join a known campaign only when unambiguous.
+    const known = dates.get(item.base);
+    const expiry = item.expiry || (item.base && known.size === 1 ? [...known][0] : '');
+    const key = item.base ? `${item.base}|${expiry}` : item.key;
+    const prior = merged.get(key) || {
+      key, name: item.name,
+      description: item.description + (expiry ? ` Expires ${expiry.slice(5, 7)}/${expiry.slice(8)}/${expiry.slice(0, 4)}` : ''),
+      cards: {}
+    };
+    for (const [id, status] of Object.entries(item.cards)) {
+      const previous = prior.cards[id];
+      prior.cards[id] = status === 'added' || previous === 'added' ? 'added'
+        : previous && previous !== status ? 'unknown' : status;
+    }
+    merged.set(key, prior);
+  }
+  return [...merged.values()];
+}
+// END AMEX NORMALIZATION
 
   const ID = "card-offers-hub";
   const DASHBOARD_ID = "card-offers-dashboard";
@@ -155,7 +206,7 @@
     const cards = snapshot.cards.filter(card => card && card.id != null).map(card => {
       const id = `${bank}:${hashId(`${bank}|${card.id}`)}`;
       ids.set(String(card.id), id);
-      return { id, name: safeCardName(card.name) };
+      return { id, name: safeCardName(card.name), scannedAt: card.scannedAt != null ? Number(card.scannedAt) || 0 : Number(snapshot.scannedAt) || 0, complete: card.complete === true };
     });
     const offers = snapshot.offers.filter(offer => offer && typeof offer.name === "string" && offer.cards && typeof offer.cards === "object").map(offer => {
       const states = {};
@@ -178,25 +229,39 @@
       bank: incoming.bank,
       publishedAt: Number(incoming.publishedAt) || 0,
       cards: incoming.cards,
-      offers: incoming.offers,
+      offers: incoming.bank === 'amex' ? normalizeAmexOffers(incoming.offers) : incoming.offers,
       scannedAt: Number(incoming.scannedAt) || 0
     };
     if (!existing) return cleanIncoming;
-    const cards = new Map(existing.cards.map(card => [card.id, card]));
-    for (const card of cleanIncoming.cards) cards.set(card.id, card);
+    const cards = new Map(existing.cards.map(card => [card.id, { ...card, scannedAt: Number(card.scannedAt) || existing.scannedAt || 0 }]));
+    const accepted = new Set();
+    const replaced = new Set();
+    for (const card of cleanIncoming.cards) {
+      const scannedAt = card.scannedAt != null ? Number(card.scannedAt) || 0 : cleanIncoming.scannedAt;
+      if (scannedAt < (cards.get(card.id)?.scannedAt || 0)) continue;
+      accepted.add(card.id);
+      if (card.complete === true && scannedAt > 0) replaced.add(card.id);
+      cards.set(card.id, { ...card, scannedAt });
+    }
     const offers = new Map(existing.offers.map(offer => [offer.key, { ...offer, cards: { ...offer.cards } }]));
+    for (const offer of offers.values()) {
+      for (const id of replaced) delete offer.cards[id];
+    }
     for (const offer of cleanIncoming.offers) {
       const prior = offers.get(offer.key) || { key: offer.key, name: offer.name, description: "", cards: {} };
       prior.name = offer.name || prior.name;
       prior.description = offer.description || prior.description;
-      Object.assign(prior.cards, offer.cards);
+      for (const [id, status] of Object.entries(offer.cards)) {
+        if (accepted.has(id)) prior.cards[id] = cleanIncoming.bank === 'amex' && prior.cards[id] === 'added' ? 'added' : status;
+      }
       offers.set(offer.key, prior);
     }
+    const remaining = [...offers.values()].filter(offer => Object.keys(offer.cards).length);
     return {
       bank: cleanIncoming.bank || existing.bank,
       publishedAt: Math.max(Number(existing.publishedAt) || 0, cleanIncoming.publishedAt),
       cards: [...cards.values()],
-      offers: [...offers.values()],
+      offers: cleanIncoming.bank === 'amex' ? normalizeAmexOffers(remaining) : remaining,
       scannedAt: Math.max(Number(existing.scannedAt) || 0, cleanIncoming.scannedAt)
     };
   }
@@ -264,8 +329,7 @@
     if (!tiles.length) return false;
     const cardsFound = new Map([[currentCardId, { id: currentCardId, name: currentCardName }]]);
     const offers = tiles.map(tile => {
-      const button = tile.querySelector('button[id^="header-panel-"], button');
-      const tileText = `${button?.innerText || button?.textContent || ""} ${tile.innerText || tile.textContent || ""}`.replace(/\s+/g, " ").trim();
+      const tileText = (tile.innerText || tile.textContent || "").replace(/\s+/g, " ").trim();
       const headingName = tile.querySelector("h2, h3, h4")?.textContent?.replace(/\s+/g, " ").trim() || "";
       const imageName = tile.querySelector("img[alt]")?.getAttribute("alt")?.replace(/\s+/g, " ").trim() || "";
       const addedTail = tileText.match(/Added to Card\s*[•·*\s]*(\d{4,5})/i)?.[1] || "";
@@ -277,27 +341,15 @@
       const name = (headingName || imageName || fallbackName || "Amex offer").slice(0, 180);
       let description = tileText;
       for (const label of new Set([headingName, imageName].filter(Boolean))) description = description.replaceAll(label, " ");
-      description = description
-        .replace(/Added to Card\s*[•·*\s]*\d{4,5}/ig, " ")
-        .replace(/Expires?(?:\s+today|\s+\d{1,2}\/\d{1,2}\/\d{2,4})?/ig, " ")
-        .replace(/Terms apply|View Details/ig, " ")
-        .replace(/\s+/g, " ").trim().slice(0, 300);
-      const status = enrolledPage || /Added to Card/i.test(tileText) ? "added"
+      description = description.replace(/\s+/g, " ").trim().slice(0, 300);
+      const status = enrolledPage || /Added to Card|Your offer has been added/i.test(tileText) ? "added"
         : tile.querySelector('button[title="add to list card"]') || eligibleView ? "addable" : "unknown";
       return { key: normalize(`${name}|${description}`), name, description, cards: { [cardId]: status } };
     }).filter(offer => offer.key);
     const old = readJson(localStorage.getItem(BANKS.amex.source), { snapshot: { cards: [], offers: [] } });
     const cards = new Map((old.snapshot?.cards || []).map(card => [String(card.id), card]));
     for (const [id, card] of cardsFound) cards.set(id, card);
-    const merged = new Map((old.snapshot?.offers || []).map(offer => [offer.key, offer]));
-    for (const offer of offers) {
-      const prior = merged.get(offer.key) || { key: offer.key, name: offer.name, cards: {} };
-      prior.name = offer.name;
-      prior.description = offer.description;
-      Object.assign(prior.cards, offer.cards);
-      merged.set(offer.key, prior);
-    }
-    const nextOffers = [...merged.values()].filter(offer => Object.keys(offer.cards || {}).length);
+    const nextOffers = normalizeAmexOffers([...(old.snapshot?.offers || []), ...offers]);
     const priorContent = JSON.stringify({ cards: old.snapshot?.cards || [], offers: old.snapshot?.offers || [] });
     const nextContent = JSON.stringify({ cards: [...cards.values()], offers: nextOffers });
     if (priorContent === nextContent) return false;
@@ -312,7 +364,7 @@
       const cards = new Map(snapshot.cards.map(card => [card.id, card]));
       for (const offer of snapshot.offers) {
         for (const [cardId, status] of Object.entries(offer.cards)) {
-          output.push({ bank: snapshot.bank, card: cards.get(cardId)?.name || "Card", status, name: offer.name, description: offer.description || "", scannedAt: snapshot.scannedAt });
+          output.push({ bank: snapshot.bank, card: cards.get(cardId)?.name || "Card", status, name: offer.name, description: offer.description || "", scannedAt: cards.get(cardId)?.scannedAt || snapshot.scannedAt });
         }
       }
     }
@@ -510,7 +562,7 @@
     </style><button class="launcher" data-restore>${ICONS.card}<span>Offer Hub</span></button><div class="shell"><header class="header" data-drag><span class="mark">${ICONS.card}</span><div class="title"><strong>Card Offers Hub</strong><span>Private local search by bank and card</span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${ICONS.minimize}</button></header><div class="bank-bar" data-current-bank></div><div class="controls"><label class="search">${ICONS.search}<input data-search type="search" placeholder="Search merchant, bank or offer..."></label><div class="toolbar"><button data-sync>${ICONS.refresh}Sync now</button><button data-dashboard>${ICONS.dashboard}Local</button><button data-server-dashboard>${ICONS.dashboard}VPN Dashboard</button><span class="spacer"></span><button data-json>${ICONS.download}JSON</button><button data-csv>${ICONS.download}CSV</button></div><div class="filters" data-bank-filters></div><div class="filters" data-status-filters></div><div class="stats" data-stats></div></div><section class="results" data-results></section><footer class="footer"><span data-notice></span><span>v0.1.9</span></footer></div>`;
     setMinimized(minimized);
     root.querySelectorAll('[data-restore], [data-minimize]').forEach(button => { button.type = 'button'; });
-    root.querySelector('.footer > span:last-child').textContent = 'v0.1.11';
+    root.querySelector('.footer > span:last-child').textContent = 'v0.1.13';
     document.body.appendChild(panel);
     root.querySelector("[data-search]").addEventListener("input", event => { query = event.target.value; render(); });
     root.addEventListener("click", event => {

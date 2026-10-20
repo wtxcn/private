@@ -68,7 +68,13 @@ function pickerFixture(stale = false) {
   const { w } = fixture;
   let clock = Date.now();
   w.Date.now = () => clock;
-  w.setTimeout = fn => { clock += 1000; queueMicrotask(fn); };
+  w.setTimeout = fn => { clock += 1000; queueMicrotask(() => {
+    if (!stale && w.location.hash.includes('/offerCategoriesPage') && picker.isConnected) {
+      draw(Number(w.location.hash.match(/accountId=(\d+)/)[1]) - 101);
+      picker.remove();
+    } else if (!stale && w.location.hash.includes('/offer-hub') && !picker.isConnected) w.document.body.append(picker);
+    fn();
+  }); };
   w.location.hash = '#/dashboard/merchantOffers/offer-hub?accountId=101';
   w.document.body.insertAdjacentHTML('beforeend', `
     <div role="button" data-testid="select-credit-card-account" aria-expanded="false">Test Card (...1111)</div>
@@ -76,7 +82,7 @@ function pickerFixture(stale = false) {
       <li role="option" data-testid="user-account-option-0" aria-selected="true">Test Card (...1111)</li>
       <li role="option" data-testid="user-account-option-1" aria-selected="false">Test Card (...2222)</li>
       <li role="option" data-testid="user-account-option-2">BUS COMPLETE CHK (...3333)</li>
-    </ul><div id="test-grid"></div>`);
+    </ul><h2>1 results</h2><div id="test-grid"></div>`);
   const picker = w.document.querySelector('[data-testid="select-credit-card-account"]');
   const menu = w.document.querySelector('[role="listbox"]');
   const grid = w.document.querySelector('#test-grid');
@@ -104,9 +110,10 @@ test('Chase picker scans current login cards read-only without overview or cache
   const snapshot = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
   assert.deepEqual(snapshot.cards.map(card => card.id), ['101', '102']);
   assert.equal(snapshot.offers.length, 2);
+  assert.ok(snapshot.cards.every(card => card.complete === true && card.scannedAt > 0));
   assert.deepEqual(snapshot.offers.map(offer => Object.keys(offer.cards)), [['101'], ['102']]);
   assert.equal(enrollments, 0);
-  assert.match(w.location.hash, /offer-hub/);
+  assert.match(w.location.hash, /offerCategoriesPage/);
   dom.window.close();
 });
 
@@ -116,12 +123,23 @@ test('Chase picker rejects a changed label and URL while the previous grid remai
   dom.window.close();
 });
 
+test('an incomplete category grid cannot authorize removal of cached offers', async () => {
+  const { dom, w, api } = pickerFixture();
+  w.document.querySelector('h2').textContent = '2 results';
+  await api.scanAllCards();
+  const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+  assert.deepEqual(saved.cards.map(card => card.id), ['999']);
+  assert.ok(saved.logs.some(line => line.includes('previous saved results were retained')));
+  dom.window.close();
+});
+
 test('adding continues across cards after enrollment removes the account picker', async () => {
   const { dom, w, api } = pickerFixture();
   await api.scanAllCards();
   api.toggleOfferSelection('merchant 0 10% cash back');
   api.toggleOfferSelection('merchant 1 10% cash back');
   const queue = w.__CHASE_ASSISTANT_TEST__.queue;
+  await w.__CHASE_ASSISTANT_TEST__.api.openPickerCard('Test Card (...2222)');
   const picker = w.document.querySelector('[data-testid="select-credit-card-account"]');
   const grid = w.document.querySelector('#test-grid');
   const enrollments = [];
@@ -152,7 +170,10 @@ test('adding continues across cards after enrollment removes the account picker'
 
 test('picker recovery never enrolls when the hub fails to restore, and Stop cancels recovery', async () => {
   for (const stop of [false, true]) {
-    const { dom, w, api } = pickerFixture();
+    const { dom, w, api } = pickerFixture(true);
+    let clock = Date.now();
+    w.Date.now = () => clock;
+    w.setTimeout = fn => { clock += 1000; queueMicrotask(fn); };
     const queue = w.__CHASE_ASSISTANT_TEST__.queue;
     w.document.querySelector('[data-testid="select-credit-card-account"]').remove();
     w.location.hash = '#/dashboard/merchantOffers/offerCategoriesPage?accountId=101&offerCategoryName=ALL';
@@ -277,7 +298,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.19/);
+  assert.match(source, /@version\s+0\.1\.20/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
