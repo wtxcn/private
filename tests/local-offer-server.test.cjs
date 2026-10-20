@@ -91,3 +91,43 @@ test('VPN dashboard search ignores card names and card-ending digits', async () 
   assert.equal(dom.window.document.querySelectorAll('.result-group').length, 0);
   dom.window.close();
 });
+
+test('an unavailable VPN keeps loopback online and retries only the configured address', async t => {
+  const http = require('node:http');
+  const originalListen = http.Server.prototype.listen;
+  const attempts = [];
+  let recovered = false;
+  t.mock.method(http.Server.prototype, 'listen', function (port, host, callback) {
+    attempts.push({ host, port });
+    if (host === '192.0.2.1') {
+      if (!recovered) {
+        process.nextTick(() => this.emit('error', Object.assign(new Error('VPN offline'), { code: 'EADDRNOTAVAIL' })));
+        return this;
+      }
+      // Simulate the configured VPN returning with a second loopback listener.
+      return originalListen.call(this, 0, '127.0.0.1', callback);
+    }
+    return originalListen.call(this, port, host, callback);
+  });
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'card-offers-offline-vpn-'));
+  const { servers, port } = await startServer({ host: '127.0.0.1', vpnHost: '192.0.2.1', port: 0, dataDir, vpnRetryMs: 10 });
+  try {
+    assert.equal(servers[0].listening, true);
+    assert.equal(servers[1].listening, false);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/`)).status, 200);
+    assert.equal((await fetch(`http://127.0.0.1:${port}/api/data`)).status, 401);
+    recovered = true;
+    await new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => reject(new Error('VPN did not reconnect')), 1000);
+      servers[1].once('listening', () => { clearTimeout(timeout); resolve(); });
+    });
+    assert.equal(servers[1].listening, true);
+    assert.ok(attempts.slice(1).every(attempt => attempt.host === '192.0.2.1' && attempt.port === port));
+  } finally {
+    await Promise.all(servers.map(server => new Promise(resolve => server.close(resolve))));
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+  const count = attempts.length;
+  await new Promise(resolve => setTimeout(resolve, 30));
+  assert.equal(attempts.length, count);
+});

@@ -143,7 +143,7 @@ function serveStatic(response, pathname) {
   return true;
 }
 
-function startServer(options = {}) {
+async function startServer(options = {}) {
   const host = options.host || process.env.OFFER_HUB_HOST || '127.0.0.1';
   const vpnHost = options.vpnHost || process.env.OFFER_HUB_VPN_HOST || '';
   const port = Number(options.port ?? process.env.OFFER_HUB_PORT ?? 8787);
@@ -190,25 +190,49 @@ function startServer(options = {}) {
     sendJson(response, 404, { error: 'Not found.' });
   };
 
-  return new Promise(async (resolve, reject) => {
-    const hosts = [...new Set([host, vpnHost].filter(Boolean))];
-    const servers = [];
-    try {
-      for (const listenHost of hosts) {
-        const server = http.createServer(handler);
-        await new Promise((listenResolve, listenReject) => {
-          server.once('error', listenReject);
-          server.listen(port, listenHost, listenResolve);
-        });
-        servers.push(server);
-        if (listenHost === host) localPort = server.address().port;
-      }
-      resolve({ server: servers[0], servers, state, host, vpnHost, port: localPort });
-    } catch (error) {
-      for (const server of servers) server.close();
-      reject(error);
-    }
+  const servers = [];
+  const listen = (server, listenHost, listenPort) => new Promise((resolve, reject) => {
+    server.once('error', reject);
+    server.listen(listenPort, listenHost, () => {
+      server.removeListener('error', reject);
+      resolve();
+    });
   });
+  try {
+    const server = http.createServer(handler);
+    servers.push(server);
+    await listen(server, host, port);
+    localPort = server.address().port;
+    if (vpnHost && vpnHost !== host) {
+      const vpnServer = http.createServer(handler);
+      servers.push(vpnServer);
+      let retryTimer;
+      const retryVpn = async () => {
+        if (!server.listening) return;
+        try {
+          await listen(vpnServer, vpnHost, localPort);
+          if (!server.listening) vpnServer.close();
+        } catch (_) {
+          if (server.listening) retryTimer = setTimeout(retryVpn, options.vpnRetryMs ?? 30000).unref();
+        }
+      };
+      server.once('close', () => {
+        clearTimeout(retryTimer);
+        if (vpnServer.listening) vpnServer.close();
+      });
+      try {
+        await listen(vpnServer, vpnHost, localPort);
+      } catch (error) {
+        if (error.code !== 'EADDRNOTAVAIL') throw error;
+        // A disconnected VPN must not take the loopback dashboard offline.
+        retryTimer = setTimeout(retryVpn, options.vpnRetryMs ?? 30000).unref();
+      }
+    }
+    return { server: servers[0], servers, state, host, vpnHost, port: localPort };
+  } catch (error) {
+    for (const server of servers) server.close();
+    throw error;
+  }
 }
 
 function parseArguments(argv) {
@@ -223,9 +247,10 @@ function parseArguments(argv) {
 }
 
 if (require.main === module) {
-  startServer(parseArguments(process.argv.slice(2))).then(({ host, vpnHost, port, state }) => {
+  startServer(parseArguments(process.argv.slice(2))).then(({ host, vpnHost, port, state, servers }) => {
     console.log(`Card Offers Server listening on http://${host}:${port}`);
-    if (vpnHost) console.log(`VPN access: http://${vpnHost}:${port}`);
+    if (vpnHost) console.log(servers.some(server => server.address()?.address === vpnHost)
+      ? `VPN access: http://${vpnHost}:${port}` : 'VPN offline; local dashboard is available. Retrying the configured VPN address.');
     console.log(`State: ${path.dirname(state.configPath)}`);
   }).catch(error => {
     console.error(error);
