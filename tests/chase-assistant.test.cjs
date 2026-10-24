@@ -200,6 +200,193 @@ test('current picker card stays on its category grid and legacy category routing
   dom.window.close();
 });
 
+function sheetPickerFixture({ startCategory = false, stale = false, incomplete = false } = {}) {
+  const fixture = loadPanel({ cards: [{ id: '999', name: 'Cached card from another login' }], offers: [], selected: {}, logs: [] });
+  const { w } = fixture;
+  const names = ['Test Cash (...1111)', 'Test Visa (...2222)', 'Test Flex (...3333)'];
+  let selected = 0;
+  let clock = Date.now();
+  let category = startCategory;
+  let allClicks = 0;
+  const addedCards = new Set();
+  const picker = w.document.createElement('button');
+  picker.dataset.testid = 'account-selector-trigger';
+  picker.setAttribute('aria-haspopup', 'dialog');
+  picker.setAttribute('aria-expanded', 'false');
+  const all = w.document.createElement('button');
+  all.dataset.testid = 'offerHubCategoryNavbarButtonTopLink';
+  all.setAttribute('aria-label', 'All 2 of 8');
+  all.textContent = 'All';
+  const heading = w.document.createElement('h2');
+  const grid = w.document.createElement('div');
+  w.document.body.append(heading, grid);
+  const label = name => name.replace(' (...', '...').replace(')', '');
+  const draw = () => {
+    heading.textContent = category ? `${incomplete ? 2 : 1} results` : 'All offers';
+    grid.innerHTML = `<a data-testid="commerce-tile" aria-label="1 of 1 Merchant ${selected} 10% cash back${addedCards.has(String(201 + selected)) ? ' Success Added' : ''}"><svg data-testid="commerce-tile-button"></svg></a>`;
+    if (category) { picker.remove(); all.remove(); }
+    else {
+      picker.textContent = label(names[selected]);
+      w.document.body.append(picker, all);
+    }
+  };
+  w.location.hash = `#/dashboard/merchantOffers/${category ? 'offerCategoriesPage' : 'offer-hub'}?accountId=201${category ? '&offerCategoryName=ALL' : ''}`;
+  draw();
+  w.Date.now = () => clock;
+  w.setTimeout = fn => { clock += 1000; queueMicrotask(() => {
+    const nextCategory = w.location.hash.includes('/offerCategoriesPage');
+    if (!stale && nextCategory !== category) { category = nextCategory; draw(); }
+    fn();
+  }); };
+  picker.onclick = () => {
+    picker.setAttribute('aria-expanded', 'true');
+    const sheet = w.document.createElement('div');
+    sheet.dataset.testid = 'account-selector-sheet';
+    sheet.setAttribute('role', 'dialog');
+    sheet.innerHTML = `<ul role="listbox">${[...names, 'Checking (...4444)', 'Disabled Card (...5555)'].map((name, i) =>
+      `<li role="option" data-testid="account-option-${i}" aria-selected="${i === selected}" aria-disabled="${i === 4}">${name}</li>`).join('')}</ul>`;
+    w.document.body.append(sheet);
+    [...sheet.querySelectorAll('[role="option"]')].forEach((option, i) => {
+      option.onclick = () => {
+        selected = i;
+        picker.textContent = label(names[i]);
+        picker.setAttribute('aria-expanded', 'false');
+        sheet.remove();
+        w.location.hash = `#/dashboard/merchantOffers/offer-hub?accountId=${201 + i}`;
+        if (!stale) draw();
+      };
+    });
+  };
+  all.onclick = () => {
+    allClicks++;
+    w.location.hash = `#/dashboard/merchantOffers/offerCategoriesPage?accountId=${201 + selected}&offerCategoryName=ALL`;
+  };
+  return { ...fixture, grid, picker, names, addedCards, allClicks: () => allClicks };
+}
+
+for (const startCategory of [false, true]) {
+  test(`sheet picker scans every card from ${startCategory ? 'All deals' : 'Offers hub'} without using overview IDs`, async () => {
+    const { dom, w, api, grid, names, allClicks } = sheetPickerFixture({ startCategory });
+    let enrollments = 0;
+    grid.onclick = () => enrollments++;
+    await api.scanAllCards();
+    const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+    assert.deepEqual(saved.cards.map(card => card.id), ['201', '202', '203']);
+    assert.deepEqual(saved.cards.map(card => card.name), names);
+    assert.ok(saved.cards.every(card => card.complete && card.pickerKind === 'sheet' && card.scannedAt));
+    assert.deepEqual(saved.offers.map(offer => Object.keys(offer.cards)), [['201'], ['202'], ['203']]);
+    assert.equal(allClicks(), 3);
+    assert.equal(enrollments, 0);
+    assert.ok(saved.logs.some(line => line.includes('3/3 cards')));
+    dom.window.close();
+  });
+}
+
+test('sheet picker rejects stale grids even when both trigger label and URL changed', async () => {
+  const { dom, api, names } = sheetPickerFixture({ stale: true });
+  assert.equal(await api.openPickerCard(names[1]), null);
+  dom.window.close();
+});
+
+test('an incomplete sheet scan cannot replace the previous saved results', async () => {
+  const { dom, w, api } = sheetPickerFixture({ incomplete: true });
+  await api.scanAllCards();
+  const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+  assert.deepEqual(saved.cards.map(card => card.id), ['999']);
+  assert.equal(w.localStorage.getItem('cardOffersHubSource.chase.v1'), null);
+  dom.window.close();
+});
+
+test('Stop during category-to-picker recovery never navigates to overview or starts enrollment', async () => {
+  const { dom, w, api, grid } = sheetPickerFixture({ startCategory: true });
+  let enrollments = 0;
+  grid.onclick = () => enrollments++;
+  queueMicrotask(() => w.__CHASE_ASSISTANT_TEST__.queue.stopCurrentRun());
+  await api.scanAllCards();
+  assert.match(w.location.hash, /offer-hub/);
+  assert.equal(enrollments, 0);
+  assert.equal(w.localStorage.getItem('cardOffersHubSource.chase.v1'), null);
+  dom.window.close();
+});
+
+test('sheet picker label comparison preserves the card name, not just its last four digits', async () => {
+  const { dom, api, names, picker } = sheetPickerFixture();
+  const click = picker.onclick;
+  picker.onclick = () => {
+    click();
+    const option = picker.ownerDocument.querySelector('[data-testid="account-option-1"]');
+    const select = option.onclick;
+    option.onclick = () => { select(); picker.textContent = 'Different Card...2222'; };
+  };
+  assert.equal(await api.openPickerCard(names[1]), null);
+  dom.window.close();
+});
+
+test('the original dropdown also scans when started on its category page', async () => {
+  const { dom, w, api } = pickerFixture();
+  w.document.querySelector('[data-testid="select-credit-card-account"]').remove();
+  w.location.hash = '#/dashboard/merchantOffers/offerCategoriesPage?accountId=101&offerCategoryName=ALL';
+  await api.scanAllCards();
+  const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+  assert.deepEqual(saved.cards.map(card => card.id), ['101', '102']);
+  assert.ok(saved.cards.every(card => card.pickerKind === 'dropdown' && card.complete));
+  dom.window.close();
+});
+
+test('sheet picker supports the existing user-started add queue across cards', async () => {
+  const { dom, w, api, grid, picker, addedCards } = sheetPickerFixture();
+  await api.scanAllCards();
+  const enrollments = [];
+  grid.onclick = event => {
+    const tile = event.target.closest('[data-testid="commerce-tile"]');
+    if (!tile) return;
+    const id = w.location.hash.match(/accountId=(\d+)/)[1];
+    enrollments.push(id);
+    addedCards.add(id);
+    tile.setAttribute('aria-label', tile.getAttribute('aria-label') + ' Success Added');
+    tile.querySelector('svg')?.remove();
+    picker.remove();
+    w.location.hash = `#/dashboard/merchantOffers/offerCategoriesPage?accountId=${id}&offerCategoryName=ALL`;
+  };
+  for (let i = 0; i < 3; i++) api.toggleOfferSelection(`merchant ${i} 10% cash back`);
+  assert.deepEqual(enrollments, []);
+  await w.__CHASE_ASSISTANT_TEST__.queue.addSelectedOffers();
+  assert.deepEqual(enrollments, ['201', '202', '203']);
+  assert.equal(api.selectedTasks().length, 0);
+  dom.window.close();
+});
+
+for (const startCategory of [false, true]) {
+  test(`legacy overview-ID scan remains usable from ${startCategory ? 'category page without either picker' : 'overview'}`, async () => {
+    const { dom, w, api } = loadPanel();
+    w.document.body.insertAdjacentHTML('beforeend', `
+      <button id="account-tile-navigation-button-requestCardPayment-301"></button>
+      <button id="accounts-name-link-button-301">Legacy Card (...1111)</button>
+      <button id="account-tile-navigation-button-requestCardPayment-302"></button>
+      <button id="accounts-name-link-button-302">Legacy Card (...2222)</button>
+      <h2>1 results</h2><div id="legacy-grid"></div>`);
+    let clock = Date.now();
+    let previousHash = '';
+    w.Date.now = () => clock;
+    w.setTimeout = fn => { clock += 1000; queueMicrotask(() => {
+      if (previousHash !== w.location.hash) {
+        previousHash = w.location.hash;
+        const id = w.location.hash.match(/accountId=(\d+)/)?.[1];
+        w.document.querySelector('#legacy-grid').innerHTML = id
+          ? `<a data-testid="commerce-tile" aria-label="Merchant ${id} 10% cash back Add offer"></a>` : '';
+      }
+      fn();
+    }); };
+    if (startCategory) w.location.hash = '#/dashboard/merchantOffers/offerCategoriesPage?accountId=301&offerCategoryName=ALL';
+    await api.scanAllCards();
+    const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+    assert.deepEqual(saved.cards.map(card => card.id), ['301', '302']);
+    assert.deepEqual(saved.offers.map(offer => Object.keys(offer.cards)), [['301'], ['302']]);
+    assert.ok(saved.cards.every(card => card.complete));
+    dom.window.close();
+  });
+}
+
 test('normalizes Chase tile labels without merchant drift', () => {
   const { normalizeOfferName } = load();
   assert.equal(normalizeOfferName('12 of 113 Viator 8% cash back Add offer New'), 'viator 8% cash back');
@@ -298,7 +485,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.20/);
+  assert.match(source, /@version\s+0\.1\.21/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.20
+// @version      0.1.21
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -221,14 +221,30 @@
   }
 
   function accountPicker() {
-    const node = document.querySelector('[data-testid="select-credit-card-account"]');
-    return node && isVisible(node) ? node : null;
+    return Array.from(document.querySelectorAll('[data-testid="select-credit-card-account"], [data-testid="account-selector-trigger"]'))
+      .find(isVisible) || null;
   }
 
   function pickerOptions() {
-    return Array.from(document.querySelectorAll('[role="option"][data-testid^="user-account-option-"]'))
+    return Array.from(document.querySelectorAll('[role="option"][data-testid^="user-account-option-"], [data-testid="account-selector-sheet"] [role="option"][data-testid^="account-option-"]'))
       .filter(node => isVisible(node) && node.getAttribute("aria-disabled") !== "true")
       .filter(node => /\(\.\.\.\d{4}\)/.test(textOf(node)) && !/\b(?:checking|chk|savings|loan|mortgage)\b/i.test(textOf(node)));
+  }
+
+  function pickerLabel(value) {
+    // The sheet trigger uses "Card...1234"; its option uses "Card (...1234)".
+    return String(value).replace(/\s*\(\.\.\.(\d{4})\)$/, "...$1");
+  }
+
+  async function restoreAccountPicker() {
+    if (cancelRequested) return false;
+    if (accountPicker()) return true;
+    if (!currentAccountId()) return false;
+    const previous = offerTiles();
+    location.assign(`https://secure.chase.com/web/auth/dashboard#/dashboard/merchantOffers/offer-hub?accountId=${encodeURIComponent(currentAccountId())}`);
+    await waitFor(() => isOffersPage() && /\/offer-hub(?:[?/#]|$)/i.test(location.hash)
+      && (accountPicker() || (previous.every(tile => !tile.isConnected) && readOffersForCard().length > 0)));
+    return !cancelRequested && Boolean(accountPicker());
   }
 
   async function showAccountPicker() {
@@ -239,25 +255,23 @@
   }
 
   async function openPickerCard(name) {
-    if (!accountPicker() && currentAccountId()) {
-      location.assign(`https://secure.chase.com/web/auth/dashboard#/dashboard/merchantOffers/offer-hub?accountId=${encodeURIComponent(currentAccountId())}`);
-      if (!await waitFor(() => accountPicker())) return null;
-    }
+    if (!await restoreAccountPicker()) return null;
     if (!await showAccountPicker() || cancelRequested) return null;
     const option = pickerOptions().find(node => textOf(node) === name);
     if (!option) return null;
+    const pickerKind = accountPicker().getAttribute("data-testid") === "account-selector-trigger" ? "sheet" : "dropdown";
     const alreadySelected = option.getAttribute("aria-selected") === "true";
     const previousId = currentAccountId();
     const previousTiles = offerTiles();
     option.click();
     const loaded = await waitFor(() => {
-      const selected = textOf(accountPicker()) === name;
+      const selected = pickerLabel(textOf(accountPicker())) === pickerLabel(name);
       const changed = alreadySelected || (currentAccountId() !== previousId
         && previousTiles.every(tile => !tile.isConnected));
       return selected && changed && isOffersPage() && currentAccountId()
         && (pageHasOfferError() || readOffersForCard().length > 0);
     });
-    return loaded && !cancelRequested ? { id: currentAccountId(), name, pickerName: name } : null;
+    return loaded && !cancelRequested ? { id: currentAccountId(), name, pickerName: name, pickerKind } : null;
   }
 
   async function scanPickerCards() {
@@ -298,7 +312,12 @@
   async function loadCompleteOffers(card) {
     const previous = offerTiles();
     // A fresh, unfiltered ALL route is required before absence can remove data.
-    location.assign(offerHubUrl(card.id));
+    if (card.pickerKind === "sheet") {
+      const all = Array.from(document.querySelectorAll('[data-testid="offerHubCategoryNavbarButtonTopLink"]'))
+        .find(node => isVisible(node) && textOf(node) === "All");
+      if (!all || cancelRequested) return false;
+      all.click();
+    } else location.assign(offerHubUrl(card.id));
     return waitFor(() => !pageHasOfferError() && isOffersPage(card.id)
       && /offerCategoriesPage.*offerCategoryName=ALL/.test(location.hash)
       && previous.every(tile => !tile.isConnected) && hasCompleteOfferCount());
@@ -372,10 +391,11 @@
     cancelRequested = false;
     render();
     try {
-      if (isOffersPage() && accountPicker()) {
+      if (isOffersPage() && await restoreAccountPicker()) {
         await scanPickerCards();
         return;
       }
+      if (cancelRequested) return;
       const ready = await openOverview();
       if (!ready) throw new Error("Account overview did not load");
       snapshot.cards = readCards().map(card => ({ ...card, scannedAt: 0, complete: false }));
