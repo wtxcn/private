@@ -12,6 +12,8 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 - `CitiOfferClicker.user.js`: Citi Merchant Offers helper.
 - `USBankOfferClicker.user.js`: U.S. Bank cash-back deals helper.
 - `FidelityFullViewRefresher.user.js`: Fidelity Full View helper for refreshing linked institutions.
+- `CardCenter_Custom_Minimum.user.js`: configurable minimum Margin filter for CardCenter rates.
+- `Aligned_Incentives_Custom_Minimum.user.js`: configurable minimum Profit filter for Aligned Incentives.
 
 ## Card Offers Hub
 
