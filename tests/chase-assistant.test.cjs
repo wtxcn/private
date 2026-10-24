@@ -72,7 +72,10 @@ function pickerFixture(stale = false) {
     if (!stale && w.location.hash.includes('/offerCategoriesPage') && picker.isConnected) {
       draw(Number(w.location.hash.match(/accountId=(\d+)/)[1]) - 101);
       picker.remove();
-    } else if (!stale && w.location.hash.includes('/offer-hub') && !picker.isConnected) w.document.body.append(picker);
+    } else if (!stale && w.location.hash.includes('/offer-hub') && !picker.isConnected) {
+      draw(Number(w.location.hash.match(/accountId=(\d+)/)[1]) - 101);
+      w.document.body.append(picker);
+    }
     fn();
   }); };
   w.location.hash = '#/dashboard/merchantOffers/offer-hub?accountId=101';
@@ -200,7 +203,7 @@ test('current picker card stays on its category grid and legacy category routing
   dom.window.close();
 });
 
-function sheetPickerFixture({ startCategory = false, stale = false, incomplete = false } = {}) {
+function sheetPickerFixture({ startCategory = false, stale = false, incomplete = false, sameNameOffers = false, duplicateId = false, unknownTile = false, delayHubMount = false } = {}) {
   const fixture = loadPanel({ cards: [{ id: '999', name: 'Cached card from another login' }], offers: [], selected: {}, logs: [] });
   const { w } = fixture;
   const names = ['Test Cash (...1111)', 'Test Visa (...2222)', 'Test Flex (...3333)'];
@@ -208,6 +211,7 @@ function sheetPickerFixture({ startCategory = false, stale = false, incomplete =
   let clock = Date.now();
   let category = startCategory;
   let allClicks = 0;
+  let hubMountTicks = 0;
   const addedCards = new Set();
   const picker = w.document.createElement('button');
   picker.dataset.testid = 'account-selector-trigger';
@@ -222,8 +226,9 @@ function sheetPickerFixture({ startCategory = false, stale = false, incomplete =
   w.document.body.append(heading, grid);
   const label = name => name.replace(' (...', '...').replace(')', '');
   const draw = () => {
-    heading.textContent = category ? `${incomplete ? 2 : 1} results` : 'All offers';
-    grid.innerHTML = `<a data-testid="commerce-tile" aria-label="1 of 1 Merchant ${selected} 10% cash back${addedCards.has(String(201 + selected)) ? ' Success Added' : ''}"><svg data-testid="commerce-tile-button"></svg></a>`;
+    heading.textContent = category ? `${incomplete || sameNameOffers ? 2 : 1} results` : 'All offers';
+    grid.innerHTML = `<a id="native-${selected}-a" data-testid="commerce-tile" aria-label="1 of 1 Merchant ${selected} 10% cash back${addedCards.has(String(201 + selected)) ? ' Success Added' : ''}"><svg data-testid="commerce-tile-button"></svg></a>`;
+    if (sameNameOffers) grid.insertAdjacentHTML('beforeend', `<a id="native-${selected}-${duplicateId ? 'a' : 'b'}" data-testid="commerce-tile" aria-label="2 of 2 Merchant ${selected} 10% cash back${unknownTile ? '' : ' Success Added'}"></a>`);
     if (category) { picker.remove(); all.remove(); }
     else {
       picker.textContent = label(names[selected]);
@@ -235,10 +240,14 @@ function sheetPickerFixture({ startCategory = false, stale = false, incomplete =
   w.Date.now = () => clock;
   w.setTimeout = fn => { clock += 1000; queueMicrotask(() => {
     const nextCategory = w.location.hash.includes('/offerCategoriesPage');
-    if (!stale && nextCategory !== category) { category = nextCategory; draw(); }
+    if (!stale && nextCategory !== category) {
+      if (delayHubMount && !nextCategory && ++hubMountTicks < 3) w.document.body.append(picker);
+      else { category = nextCategory; hubMountTicks = 0; draw(); }
+    }
     fn();
   }); };
   picker.onclick = () => {
+    assert.equal(category, false, 'do not open the picker before the restored hub has mounted');
     picker.setAttribute('aria-expanded', 'true');
     const sheet = w.document.createElement('div');
     sheet.dataset.testid = 'account-selector-sheet';
@@ -288,6 +297,26 @@ test('sheet picker rejects stale grids even when both trigger label and URL chan
   dom.window.close();
 });
 
+test('sheet scan retries a trigger whose first click was lost while the hub mounted', async () => {
+  const { dom, w, api, picker } = sheetPickerFixture({ startCategory: true });
+  const show = picker.onclick;
+  let clicks = 0;
+  picker.onclick = () => { if (++clicks > 1) show(); };
+  await api.scanAllCards();
+  const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+  assert.deepEqual(saved.cards.map(card => card.id), ['201', '202', '203']);
+  assert.ok(clicks >= 4);
+  dom.window.close();
+});
+
+test('sheet scan waits for the restored hub grid even when the picker appears early', async () => {
+  const { dom, w, api } = sheetPickerFixture({ startCategory: true, delayHubMount: true });
+  await api.scanAllCards();
+  const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+  assert.deepEqual(saved.cards.map(card => card.id), ['201', '202', '203']);
+  dom.window.close();
+});
+
 test('an incomplete sheet scan cannot replace the previous saved results', async () => {
   const { dom, w, api } = sheetPickerFixture({ incomplete: true });
   await api.scanAllCards();
@@ -296,6 +325,27 @@ test('an incomplete sheet scan cannot replace the previous saved results', async
   assert.equal(w.localStorage.getItem('cardOffersHubSource.chase.v1'), null);
   dom.window.close();
 });
+
+test('native offer count accepts distinct same-name offers without treating conflicting enrollment as added', async () => {
+  const { dom, w, api } = sheetPickerFixture({ sameNameOffers: true });
+  await api.scanAllCards();
+  const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+  assert.deepEqual(saved.cards.map(card => card.id), ['201', '202', '203']);
+  assert.ok(saved.cards.every(card => card.complete));
+  assert.ok(saved.offers.every(offer => Object.values(offer.cards).every(status => status === 'unknown')));
+  dom.window.close();
+});
+
+for (const extra of [{ duplicateId: true }, { unknownTile: true }]) {
+  test(`native offer count rejects ${extra.duplicateId ? 'duplicate IDs' : 'unrecognized tile status'} as a complete list`, async () => {
+    const { dom, w, api } = sheetPickerFixture({ sameNameOffers: true, ...extra });
+    await api.scanAllCards();
+    const saved = JSON.parse(w.localStorage.getItem('chaseOffersAssistantSnapshot.v1'));
+    assert.deepEqual(saved.cards.map(card => card.id), ['999']);
+    assert.equal(w.localStorage.getItem('cardOffersHubSource.chase.v1'), null);
+    dom.window.close();
+  });
+}
 
 test('Stop during category-to-picker recovery never navigates to overview or starts enrollment', async () => {
   const { dom, w, api, grid } = sheetPickerFixture({ startCategory: true });
@@ -485,7 +535,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.21/);
+  assert.match(source, /@version\s+0\.1\.22/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);

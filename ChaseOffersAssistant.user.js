@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.21
+// @version      0.1.22
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -243,15 +243,22 @@
     const previous = offerTiles();
     location.assign(`https://secure.chase.com/web/auth/dashboard#/dashboard/merchantOffers/offer-hub?accountId=${encodeURIComponent(currentAccountId())}`);
     await waitFor(() => isOffersPage() && /\/offer-hub(?:[?/#]|$)/i.test(location.hash)
-      && (accountPicker() || (previous.every(tile => !tile.isConnected) && readOffersForCard().length > 0)));
+      && previous.every(tile => !tile.isConnected) && readOffersForCard().length > 0);
     return !cancelRequested && Boolean(accountPicker());
   }
 
   async function showAccountPicker() {
-    const picker = accountPicker();
-    if (!picker || cancelRequested) return false;
-    if (picker.getAttribute("aria-expanded") !== "true") picker.click();
-    return waitFor(() => pickerOptions().length > 0);
+    let retryAt = 0;
+    return waitFor(() => {
+      if (pickerOptions().length > 0) return true;
+      const picker = accountPicker();
+      // Chase can replace the trigger while the hub finishes mounting.
+      if (picker && picker.getAttribute("aria-expanded") !== "true" && Date.now() >= retryAt) {
+        retryAt = Date.now() + 700;
+        picker.click();
+      }
+      return pickerOptions().length > 0;
+    });
   }
 
   async function openPickerCard(name) {
@@ -279,9 +286,9 @@
     const names = [...new Set(pickerOptions().map(textOf))];
     log(`Found ${names.length} card(s) in Choose account. Starting read-only scan.`);
     let completed = 0;
-    for (const name of names) {
+    for (const [index, name] of names.entries()) {
       if (cancelRequested) break;
-      log(`Scanning ${completed + 1}/${names.length}: ${name}`);
+      log(`Scanning ${index + 1}/${names.length}: ${name}`);
       const card = await openPickerCard(name);
       if (!card || pageHasOfferError()) { log(`Skipped ${name}: Chase did not confirm this card's offers.`); continue; }
       if (!await loadCompleteOffers(card)) { log(`Skipped ${name}: full offer list was not confirmed.`); continue; }
@@ -327,7 +334,12 @@
     const heading = Array.from(document.querySelectorAll('h2, [role="heading"]'))
       .find(node => !node.closest?.(`#${ID}`) && isVisible(node) && /\b\d+\s+results\b/i.test(textOf(node)));
     const count = textOf(heading).match(/\b(\d+)\s+results\b/i)?.[1];
-    return count !== undefined && Number(count) === readOffersForCard().length;
+    const tiles = offerTiles();
+    // Different native offers can share a merchant/reward label. Count their IDs,
+    // not the grouped dashboard rows, while collapsing repeated carousel copies.
+    const identities = new Set(tiles.map(tile => tile.id || normalizeOfferName(tile.getAttribute("aria-label") || textOf(tile))));
+    return count !== undefined && tiles.every(tile => tileStatus(tile))
+      && Number(count) === identities.size;
   }
 
   function mergeCardOffers(card, cardOffers) {
