@@ -14,6 +14,15 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 - `FidelityFullViewRefresher.user.js`: Fidelity Full View helper for refreshing linked institutions.
 - `CardCenter_Custom_Minimum.user.js`: configurable minimum Margin filter for CardCenter rates.
 - `Aligned_Incentives_Custom_Minimum.user.js`: configurable minimum Profit filter for Aligned Incentives.
+- `Southwest3TicketComboFinder.user.js`: Southwest fare collector and three-ticket combo finder.
+
+## Southwest 3-Ticket Combo Finder
+
+Source: [美卡论坛 topic 519608](https://www.uscardforum.com/t/topic/519608).
+
+Install `Southwest3TicketComboFinder.user.js` in Tampermonkey, then open Southwest.com and click the floating ticket button. `Auto Search` visits up to 40 preset routes for a departure date 35 days ahead, one route per page, and stops when it finds a qualifying combination or exhausts the routes. The run can navigate the Southwest page for several minutes.
+
+The script reads Southwest shopping responses and keeps fare records in Tampermonkey storage in the current browser profile. `Clear` removes those records; export downloads a JSON file locally. Ticket links open Southwest booking search pages. The script does not submit bookings or payments.
 
 ## Card Offers Hub
 
