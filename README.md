@@ -19,11 +19,15 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 
 ## YouTube Highest Quality
 
-Install [YouTubeHighestQuality.user.js](https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js) in Tampermonkey or Violentmonkey, then refresh YouTube. Opening a video or switching videos on the site automatically selects the highest available ordinary resolution, including 4K/8K when offered. At equal resolution, higher frame rates take priority. Premium enhanced-bitrate and upgrade options are skipped.
+Install [YouTubeHighestQuality.user.js](https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js) in Tampermonkey or Violentmonkey, ensure this individual script is enabled, then refresh YouTube. Opening a video or switching videos on the site automatically selects the highest available ordinary resolution, including 4K/8K when offered. At equal resolution, higher frame rates take priority. Auto, Premium enhanced-bitrate and upgrade options are skipped.
 
 The script uses the native quality menu, which may appear briefly. It waits while the user is using the menu, skips ads, and performs only a few checks per video. Existing buffered video can delay the visible resolution change. It does not change playback, volume, or subtitles. Ordinary watch pages use the inspected menu structure; Shorts and live streams are attempted only when they expose a compatible menu.
 
-No remote library or extra network request is used by the script. Tampermonkey can download script updates from this repository. Syntax checks and eight synthetic DOM tests pass; live installation and playback have not yet been verified.
+Keep the video tab in the foreground with the settings menu closed for a few seconds after loading. To verify the selection, reopen Settings: Quality should show a fixed value such as `2160p60 4K`; `Auto (2160p60)` is still automatic. After a script update, refresh YouTube to load the new version.
+
+No remote library or extra network request is used by the script. Tampermonkey can download script updates from this repository. The script uses a DOM sandbox and exposes its local diagnostic status in the document element's `data-youtube-highest-quality` attribute, with resolution/reason companion attributes. Syntax checks and twelve synthetic DOM tests pass, including Auto exclusion and rebuilt-menu confirmation.
+
+An initial live Chrome/Tampermonkey test confirmed a fixed `2160p60 4K` selection after enabling the individual script. The final follow-up-check adjustment and SPA navigation are covered by synthetic tests; live revalidation remains pending.
 
 ```sh
 node --check YouTubeHighestQuality.user.js
