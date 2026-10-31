@@ -15,6 +15,20 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 - `CardCenter_Custom_Minimum.user.js`: configurable minimum Margin filter for CardCenter rates.
 - `Aligned_Incentives_Custom_Minimum.user.js`: configurable minimum Profit filter for Aligned Incentives.
 - `Southwest3TicketComboFinder.user.js`: Southwest fare collector and three-ticket combo finder.
+- `YouTubeHighestQuality.user.js`: automatically selects the highest available ordinary YouTube resolution.
+
+## YouTube Highest Quality
+
+Install [YouTubeHighestQuality.user.js](https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js) in Tampermonkey or Violentmonkey, then refresh YouTube. Opening a video or switching videos on the site automatically selects the highest available ordinary resolution, including 4K/8K when offered. At equal resolution, higher frame rates take priority. Premium enhanced-bitrate and upgrade options are skipped.
+
+The script uses the native quality menu, which may appear briefly. It waits while the user is using the menu, skips ads, and performs only a few checks per video. Existing buffered video can delay the visible resolution change. It does not change playback, volume, or subtitles. Ordinary watch pages use the inspected menu structure; Shorts and live streams are attempted only when they expose a compatible menu.
+
+No remote library or extra network request is used by the script. Tampermonkey can download script updates from this repository. Syntax checks and eight synthetic DOM tests pass; live installation and playback have not yet been verified.
+
+```sh
+node --check YouTubeHighestQuality.user.js
+node --test tests/youtube-highest-quality.test.cjs
+```
 
 ## Southwest 3-Ticket Combo Finder
 
