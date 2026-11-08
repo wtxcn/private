@@ -12,10 +12,15 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 - `CitiOfferClicker.user.js`: Citi Merchant Offers helper.
 - `USBankOfferClicker.user.js`: U.S. Bank cash-back deals helper.
 - `FidelityFullViewRefresher.user.js`: Fidelity Full View helper for refreshing linked institutions.
+- `MonarchAutoRefresher.user.js`: scheduled Monarch Refresh all at 05:00–23:00 America/Chicago, every three hours.
 - `CardCenter_Custom_Minimum.user.js`: configurable minimum Margin filter for CardCenter rates.
 - `Aligned_Incentives_Custom_Minimum.user.js`: configurable minimum Profit filter for Aligned Incentives.
 - `Southwest3TicketComboFinder.user.js`: Southwest fare collector and three-ticket combo finder.
 - `YouTubeHighestQuality.user.js`: automatically selects the highest available ordinary YouTube resolution.
+
+## Monarch Scheduled Refresh
+
+Install [MonarchAutoRefresher.user.js](https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js) in Tampermonkey, then keep the logged-in Monarch Accounts page open. It clicks the native Refresh all button at 05:00, 08:00, 11:00, 14:00, 17:00, 20:00 and 23:00 America/Chicago. The computer must remain awake; locking the screen is compatible with DOM clicks. Missed slots older than ten minutes are skipped. Multiple tabs in one browser profile are deduplicated, and no account data is read or uploaded. See the [installation and testing guide](monarch-auto-refresh/README.md).
 
 ## YouTube Highest Quality
 
