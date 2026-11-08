@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monarch 定时 Refresh all
 // @namespace    local.monarch.auto-refresh
-// @version      1.0.2
+// @version      1.0.3
 // @description  每天 05:00 起，每 3 小时点击 Refresh all，最后一次为 23:00（America/Chicago）。
 // @homepageURL  https://github.com/wtxcn/private/blob/main/monarch-auto-refresh/README.md
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js
@@ -24,13 +24,34 @@
   const STORAGE_KEY = 'monarch-auto-refresh:last-attempt:v1';
   const LOCK_NAME = 'monarch-auto-refresh:v1';
   // 只暴露脚本版本和通用运行状态，供安装检查使用，不包含账户信息。
-  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.2');
+  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.3');
   const format = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
   });
   let running = false;
   let lastMessage = '';
+  let statusButton;
+
+  function onAccountsPage() {
+    return /^\/accounts\/?$/.test(location.pathname);
+  }
+
+  function timeParts(now) {
+    return Object.fromEntries(format.formatToParts(now).map(x => [x.type, x.value]));
+  }
+
+  function nextScheduleLabel(now, last = null) {
+    const p = timeParts(now);
+    const currentSlot = scheduledSlot(now);
+    if (currentSlot && last?.slot !== currentSlot) {
+      return `${p.year}-${p.month}-${p.day} ${p.hour}:00（中部，当前窗口）`;
+    }
+    const nextHour = HOURS.find(hour => hour > Number(p.hour));
+    const day = new Date(Date.UTC(Number(p.year), Number(p.month) - 1,
+      Number(p.day) + (nextHour === undefined ? 1 : 0)));
+    return `${day.toISOString().slice(0, 10)} ${String(nextHour ?? HOURS[0]).padStart(2, '0')}:00（中部）`;
+  }
 
   function log(message) {
     if (message === lastMessage) return;
@@ -40,7 +61,7 @@
   }
 
   function scheduledSlot(now) {
-    const p = Object.fromEntries(format.formatToParts(now).map(x => [x.type, x.value]));
+    const p = timeParts(now);
     if (!HOURS.includes(Number(p.hour)) || Number(p.minute) >= GRACE_MINUTES) return null;
     return `${TIME_ZONE}:${p.year}-${p.month}-${p.day}T${p.hour}:00`;
   }
@@ -80,10 +101,72 @@
     return matches.length === 1 ? matches[0] : null;
   }
 
+  function pageStatus() {
+    if (!onAccountsPage()) return '本页不执行：请另留 Accounts 账户列表标签并保持登录。';
+    if (!navigator.locks?.request) return '账户列表页暂不可执行：浏览器缺少 Web Locks。';
+    if (!navigator.onLine) return '账户列表页暂离线：联网后才能执行。';
+    const modalOpen = Array.from(document.querySelectorAll('[aria-modal="true"], dialog[open]'))
+      .some(isVisible);
+    if (modalOpen) return '账户列表页有弹窗：关闭后才能执行。';
+    return findButton()
+      ? '此账户列表页可自动刷新（仅在计划窗口内）。'
+      : '账户列表页按钮未就绪：请检查登录、同步状态或按钮。';
+  }
+
+  function updateDiagnostics(now) {
+    const root = document.documentElement;
+    const page = pageStatus();
+    let last = null;
+    let lastLabel = '暂无脚本尝试';
+    try {
+      last = readLast();
+      if (last) {
+        const status = last.status === 'clicked' ? '已调用点击' : '已记录尝试';
+        lastLabel = `${format.format(new Date(last.at))} ${status}`;
+      }
+    } catch {
+      lastLabel = '记录读取异常，点击查看诊断';
+    }
+    root.setAttribute('data-monarch-auto-refresh-last-check', now.toISOString());
+    root.setAttribute('data-monarch-auto-refresh-page', onAccountsPage() ? 'accounts' : 'other');
+    root.setAttribute('data-monarch-auto-refresh-page-status', page);
+    // 只公开本脚本的尝试记录，不读取或展示 Monarch 账户数据。
+    root.setAttribute('data-monarch-auto-refresh-last-attempt', JSON.stringify(last
+      ? { slot: last.slot, at: last.at, status: last.status === 'clicked' ? 'clicked' : 'attempted' }
+      : null));
+    const next = nextScheduleLabel(now, last);
+    root.setAttribute('data-monarch-auto-refresh-next-schedule', next);
+    if (!statusButton || !statusButton.isConnected) {
+      statusButton = document.createElement('button');
+      statusButton.id = 'monarch-auto-refresh-status-button';
+      statusButton.type = 'button';
+      statusButton.setAttribute('aria-label', 'Monarch 自动刷新状态，点击查看诊断');
+      statusButton.style.cssText = 'position:fixed;right:10px;bottom:175px;z-index:1000;'
+        + 'max-width:300px;max-height:100px;overflow:auto;padding:7px 10px;'
+        + 'border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#0f172a;'
+        + 'font:11px/1.45 system-ui,sans-serif;text-align:left;white-space:pre-line;'
+        + 'box-shadow:0 2px 6px #0002;cursor:pointer;';
+      statusButton.addEventListener('click', showDiagnostics);
+      (document.body || root).appendChild(statusButton);
+    }
+    const brief = !onAccountsPage() ? '本页不执行（仅 Accounts）'
+      : page.startsWith('此账户') ? '此页可自动刷新' : '此页暂不可自动刷新';
+    statusButton.textContent = `Monarch 自动刷新 · ${brief}\n最近：${lastLabel}\n下次：${next}`;
+    statusButton.title = `${page}\n点击查看诊断；“已调用点击”不代表 Monarch 已刷新成功。`;
+  }
+
   async function tick() {
-    if (running || !/^\/accounts\/?$/.test(location.pathname)) return;
+    updateDiagnostics(new Date());
+    if (!onAccountsPage()) {
+      log('本页不执行自动刷新：请另留 Accounts 账户列表标签并保持登录。');
+      return;
+    }
+    if (running) return;
     const slot = scheduledSlot(new Date());
-    if (!slot) return;
+    if (!slot) {
+      log('当前不在计划时点后的 10 分钟窗口；等待下次计划，不补刷。');
+      return;
+    }
     if (!navigator.locks?.request) {
       log('缺少 Web Locks 支持，未刷新。请使用最新版 Chrome / Edge / Firefox。');
       return;
@@ -122,22 +205,29 @@
       log(`本轮停止：${error.message}`);
     } finally {
       running = false;
+      updateDiagnostics(new Date());
     }
   }
 
-  GM_registerMenuCommand('查看计划 / 检查按钮（不执行刷新）', () => {
+  function showDiagnostics() {
     let last;
     try { last = readLast(); } catch (error) { last = { error: error.message }; }
     alert([
       `时区：${TIME_ZONE}`,
       `每天：${HOURS.map(h => `${String(h).padStart(2, '0')}:00`).join('、')}`,
       `当前中部时间：${format.format(new Date())}`,
-      `账户列表页：${/^\/accounts\/?$/.test(location.pathname) ? '是' : '否'}`,
+      `本页状态：${pageStatus()}`,
       `Refresh all 按钮：${findButton() ? '已识别且可点击' : '未就绪 / 不唯一'}`,
       `最近脚本尝试：${last ? JSON.stringify(last) : '暂无'}`,
+      `下次计划：${nextScheduleLabel(new Date(), last)}`,
+      `最近脚本检查：${document.documentElement.getAttribute('data-monarch-auto-refresh-last-check') || '暂无'}`,
+      '请独立保留 Accounts 账户列表标签；同一标签切到 Transactions 等页面后不执行。',
+      '“attempted / clicked”仅表示脚本尝试或调用点击，不代表 Monarch 服务端已成功刷新。',
       '仅在每个计划时点后 10 分钟内执行；错过不补刷。',
     ].join('\n'));
-  });
+  }
+
+  GM_registerMenuCommand('查看计划 / 检查按钮（不执行刷新）', showDiagnostics);
 
   log(`已启动。${TIME_ZONE} 每天 ${HOURS.map(h => `${h}:00`).join('、')}；请保持账户列表页打开并登录。`);
   setInterval(tick, CHECK_EVERY_MS);
