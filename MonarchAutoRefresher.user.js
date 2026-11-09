@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monarch 定时 Refresh all
 // @namespace    local.monarch.auto-refresh
-// @version      1.0.5
+// @version      1.0.6
 // @description  每天 05:00 起每 3 小时进入 Accounts 并点击 Refresh all（America/Chicago）。
 // @homepageURL  https://github.com/wtxcn/private/blob/main/monarch-auto-refresh/README.md
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js
@@ -31,7 +31,7 @@
   const NAVIGATION_TTL_MS = 45_000;
   const CONFIRM_TIMEOUT_MS = 10 * 60_000;
   // 只暴露脚本版本和通用运行状态，供安装检查使用，不包含账户信息。
-  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.5');
+  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.6');
   const format = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
@@ -127,6 +127,8 @@
 
   function checkSyncResult() {
     if (!monitor) return;
+    const last = readLast();
+    if (last?.slot === monitor.slot && last.result) { monitor = null; return; }
     const now = Date.now();
     const visible = syncCompleteVisible();
     if (!visible) monitor.sawAbsent = true;
@@ -150,6 +152,19 @@
       });
       observer.observe(document.body || document.documentElement,
         { childList: true, characterData: true, subtree: true });
+    }
+  }
+
+  function reconcilePendingOutcome() {
+    if (monitor) return;
+    const last = readLast();
+    if (!last || last.status !== 'clicked' || last.result) return;
+    const newest = readHistory()[0];
+    if (newest?.slot !== last.slot || newest.outcome !== 'clicked') return;
+    if (Date.now() - last.at >= CONFIRM_TIMEOUT_MS) {
+      recordOutcome(last.slot, Date.now(), 'unconfirmed');
+    } else if (onAccountsPage()) {
+      startSyncMonitor(last.slot, last.at, false);
     }
   }
 
@@ -320,6 +335,7 @@
 
   async function tick() {
     const checkTime = new Date();
+    try { reconcilePendingOutcome(); } catch (error) { log(`日志恢复失败：${error.message}`); }
     try { checkSyncResult(); } catch (error) { log(`同步状态检查失败：${error.message}`); }
     updateDiagnostics(checkTime);
     if (running) return;
