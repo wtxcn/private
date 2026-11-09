@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monarch 定时 Refresh all
 // @namespace    local.monarch.auto-refresh
-// @version      1.0.7
+// @version      1.0.8
 // @description  每天 05:00 起每 3 小时进入 Accounts 并点击 Refresh all（America/Chicago）。
 // @homepageURL  https://github.com/wtxcn/private/blob/main/monarch-auto-refresh/README.md
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js
@@ -31,7 +31,7 @@
   const NAVIGATION_TTL_MS = 45_000;
   const CONFIRM_TIMEOUT_MS = 10 * 60_000;
   // 只暴露脚本版本和通用运行状态，供安装检查使用，不包含账户信息。
-  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.7');
+  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.8');
   const format = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
@@ -104,9 +104,26 @@
     return entries;
   }
 
+  function normalizeHistory() {
+    const last = readLast();
+    if (!last) return;
+    const history = readHistory();
+    const entry = history.find(item => item.slot === last.slot);
+    if (!entry || entry.at === last.at) return;
+    // 旧版把状态判定时间覆盖了点击时间；恢复为刷新记录中的实际点击时间。
+    if (entry.outcome === 'confirmed' || entry.outcome === 'unconfirmed') entry.resultAt = entry.at;
+    entry.at = last.at;
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+  }
+
   function recordOutcome(slot, at, outcome) {
-    const history = readHistory().filter(entry => entry.slot !== slot);
-    history.unshift({ slot, at, outcome });
+    const history = readHistory();
+    const prior = history.find(entry => entry.slot === slot);
+    const last = readLast();
+    const clickedAt = last?.slot === slot ? last.at : prior?.at ?? at;
+    const entry = { slot, at: clickedAt, outcome };
+    if (outcome === 'confirmed' || outcome === 'unconfirmed') entry.resultAt = at;
+    history.splice(0, history.length, entry, ...history.filter(item => item.slot !== slot));
     localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 30)));
     document.documentElement.setAttribute('data-monarch-auto-refresh-outcome', outcome);
     if (outcome === 'confirmed' || outcome === 'unconfirmed') {
@@ -246,11 +263,16 @@
     }
     let historyLabel = '暂无刷新记录';
     try {
-      const labels = { clicked: '已点击，等待同步结果', confirmed: 'Monarch 显示同步完成',
+      const labels = { confirmed: 'Monarch 显示同步完成',
         unconfirmed: '已点击，未确认完成', attempted: '已记录尝试',
         click_error: '按钮点击报错' };
-      historyLabel = readHistory().slice(0, 10).map(entry =>
-        `${format.format(new Date(entry.at))} ${labels[entry.outcome] || entry.outcome}`)
+      historyLabel = readHistory().slice(0, 10).map(entry => {
+        const label = entry.outcome === 'clicked'
+          ? Date.now() - entry.at < CONFIRM_TIMEOUT_MS
+            ? '已点击，等待同步结果' : '旧记录：已点击，结果未记录'
+          : labels[entry.outcome] || entry.outcome;
+        return `${format.format(new Date(entry.at))} ${label}`;
+      })
         .join('\n') || historyLabel;
     } catch { historyLabel = '日志读取异常'; }
     statusButton.textContent = `↻ Monarch 自动刷新 · ${brief}\n最近：${lastLabel}\n下次：${next}`
@@ -442,6 +464,7 @@
   GM_registerMenuCommand('查看计划 / 检查按钮（不执行刷新）', showDiagnostics);
 
   try {
+    normalizeHistory();
     const last = readLast();
     let history = readHistory();
     if (last && history.length === 0) {
