@@ -85,6 +85,7 @@ button { cursor: pointer; }
 .status { font-weight: 800; text-transform: capitalize; }
 .status.added { color: #26734d; }
 .status.addable { color: #0874cf; }
+.status.redeemed { color: #6350a0; }
 .status.unknown { color: #945c15; }
 .time { color: #8490a0; text-align: right; }
 .empty { padding: 80px 24px; color: #718096; text-align: center; }

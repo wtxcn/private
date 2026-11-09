@@ -6,7 +6,7 @@ const { JSDOM } = require('jsdom');
 
 const source = fs.readFileSync(path.join(__dirname, '../CardOffersHub.user.js'), 'utf8');
 
-function setup(url = 'https://secure.chase.com/web/auth/dashboard#/dashboard/overview') {
+function setup(url = 'https://secure.chase.com/web/auth/dashboard#/dashboard/overview', amexTiming = { poll: 5, settle: 0, timeout: 200 }) {
   const dom = new JSDOM('', { url, runScripts: 'outside-only', pretendToBeVisual: true });
   const w = dom.window;
   const values = new Map();
@@ -15,7 +15,7 @@ function setup(url = 'https://secure.chase.com/web/auth/dashboard#/dashboard/ove
   w.GM_registerMenuCommand = () => {};
   w.GM_addValueChangeListener = () => {};
   w.HTMLElement.prototype.getBoundingClientRect = function () { return { left: 20, top: 30, width: 100, height: 60 }; };
-  w.__CARD_OFFERS_HUB_TEST__ = {};
+  w.__CARD_OFFERS_HUB_TEST__ = { amexTiming };
   w.eval(source);
   return { dom, w, values, api: w.__CARD_OFFERS_HUB_TEST__.api };
 }
@@ -66,7 +66,7 @@ test('Hub starts minimized and restores repeatedly without capturing launcher cl
     api.render();
     assert.equal(panel.classList.contains('minimized'), true);
   }
-  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.13');
+  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.15');
   dom.window.close();
 });
 
@@ -307,7 +307,7 @@ test('Hub captures added Amex offers directly from the dashboard', () => {
 });
 
 test('Hub captures the Amex Added to Card page and uses its authoritative selected-card label', () => {
-  const html = '<div data-testid="simple_switcher_wrapper"><div role="combobox" aria-label="Open to manage your other accounts"><div data-testid="simple_switcher_selected_option_display" aria-label="Business Platinum Card® ending in 91001."><span>Wrong stale card ••••11005</span></div></div></div><div data-testid="addedToCardViewAllContainer"><div class="offer-row"><img alt="Valentino - Luxury Fashion & Accessories"><div><h3>Valentino - Luxury Fashion & Accessories</h3><span>Spend $1,100 or more, earn $220 back</span><span>Expires 9/15/26</span><button>Terms apply</button><button data-testid="merchantOfferDetailsLink">View Details</button></div></div></div>';
+  const html = '<div data-testid="simple_switcher_wrapper"><div role="combobox" aria-label="Open to manage your other accounts"><div data-testid="simple_switcher_selected_option_display" aria-label="Business Platinum Card® ending in 8765."><span>Wrong stale card ••••11005</span></div></div></div><div data-testid="addedToCardViewAllContainer"><div class="offer-row"><img alt="Valentino - Luxury Fashion & Accessories"><div><h3>Valentino - Luxury Fashion & Accessories</h3><span>Spend $1,100 or more, earn $220 back</span><span>Expires 9/15/26</span><button>Terms apply</button><button data-testid="merchantOfferDetailsLink">View Details</button></div></div></div>';
   const { dom, w, api } = setup('https://global.americanexpress.com/offers/enrolled?opaqueAccountId=opaque-secret-1234');
   w.document.body.innerHTML = html;
   assert.equal(api.collectAmexPage(), true);
@@ -316,14 +316,259 @@ test('Hub captures the Amex Added to Card page and uses its authoritative select
   assert.equal(item.name, 'Valentino - Luxury Fashion & Accessories');
   assert.equal(item.status, 'added');
   assert.match(item.card, /Business Platinum Card/);
-  assert.match(item.card, /91001/);
+  assert.match(item.card, /8765/);
   assert.doesNotMatch(item.card, /11005/);
   assert.doesNotMatch(JSON.stringify(api.getData()), /opaque-secret-1234/);
   dom.window.close();
 });
 
+test('Amex redemption badges update one campaign and survive later Added scans', () => {
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers/enrolled');
+  const render = badge => {
+    w.document.body.innerHTML = `<div data-testid="simple_switcher_wrapper">Test Card (...1234)</div>
+      <div id="offer-nordstrom"><h3>Nordstrom</h3><span>Spend $100, get $20 back</span>
+      <span>Expires 12/31/2026</span> ${badge} <button>View Details</button></div>`;
+    api.syncCurrentBank(true);
+  };
+  render('<span>Added to Card</span>');
+  assert.equal(api.placements()[0].status, 'added');
+  render('<span>Redeemed on 11/08/2026</span>');
+  assert.equal(api.placements().length, 1);
+  assert.equal(api.placements()[0].status, 'redeemed');
+  assert.equal(api.placements()[0].description, 'Spend $100, get $20 back Expires 12/31/2026');
+  render('<span>Added to Card</span> <button>Redeem Now</button>');
+  assert.equal(api.placements().length, 1);
+  assert.equal(api.placements()[0].status, 'redeemed');
+  dom.window.close();
+});
+
+test('Amex Redeemed view is explicit and redeem instructions do not mean redeemed', () => {
+  const fixture = '<div data-testid="simple_switcher_wrapper">Test Card (...5678)</div><div id="offer-nordstrom"><h3>Nordstrom</h3><span>Spend $100, get $20 back</span><span>Expires 12/31/2026</span><button>View Details</button></div>';
+  for (const [url, control] of [
+    ['https://global.americanexpress.com/offers/redeemed', '<input type="radio" id="REDEEMED" checked>'],
+    ['https://global.americanexpress.com/dashboard', '<input type="radio" id="REDEEMED" checked>'],
+    ['https://global.americanexpress.com/dashboard', '<div id="REDEEMED" role="radio" aria-checked="true"></div>']
+  ]) {
+    const { dom, w, api } = setup(url);
+    w.document.body.innerHTML = fixture + control;
+    api.syncCurrentBank(true);
+    assert.equal(api.placements()[0].status, 'redeemed');
+    dom.window.close();
+  }
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers/enrolled');
+  w.document.body.innerHTML = fixture.replace('<button>View Details</button>', '<span>This offer can be redeemed online.</span><button>Redeem Now</button>')
+    + '<input type="radio" id="REDEEMED">';
+  api.syncCurrentBank(true);
+  assert.equal(api.placements()[0].status, 'added');
+  dom.window.close();
+});
+
+test('Amex merge and sanitization retain redeemed per card, including complete scans', () => {
+  const { dom, api } = setup();
+  const normalized = api.sanitizeSnapshot('amex', { scannedAt: 100,
+    cards: [{ id: 'a', name: 'Card A' }],
+    offers: [{ key: 'nordstrom', name: 'Nordstrom', cards: { a: 'redeemed' } }] });
+  assert.equal(Object.values(normalized.offers[0].cards)[0], 'redeemed');
+  const old = { bank: 'amex', scannedAt: 100,
+    cards: [{ id: 'a', name: 'Card A' }, { id: 'b', name: 'Card B' }],
+    offers: [{ key: 'amex|nordstrom|spend $100, get $20 back|2026-12-31', name: 'Nordstrom',
+      description: 'Spend $100, get $20 back Expires 12/31/2026', cards: { a: 'redeemed', b: 'added' } }] };
+  for (const status of ['added', 'addable']) {
+    for (const complete of [false, true]) {
+      const merged = api.mergeSnapshots(old, { bank: 'amex', scannedAt: 200,
+        cards: [{ id: 'a', name: 'Card A', scannedAt: 200, complete }],
+        offers: [{ ...old.offers[0], cards: { a: status } }] });
+      assert.deepEqual({ ...merged.offers[0].cards }, { a: 'redeemed', b: 'added' });
+    }
+  }
+  dom.window.close();
+});
+
+test('Hub popup and full dashboard filter redeemed offers', () => {
+  for (const mode of ['popup', 'dashboard']) {
+    const { dom, values, api } = setup();
+    values.set('cardOffersHub.data.v1', { version: 2, snapshots: { amex: {
+      bank: 'amex', cards: [{ id: 'a', name: 'Card A' }, { id: 'b', name: 'Card B' }],
+      offers: [{ key: 'nordstrom', name: 'Nordstrom', cards: { a: 'redeemed', b: 'added' } }], scannedAt: 100
+    } } });
+    const root = (mode === 'popup' ? api.mount() : api.mountDashboard()).shadowRoot;
+    root.querySelector('[data-status-filter="redeemed"]').click();
+    const results = root.querySelector(mode === 'popup' ? '[data-results]' : '[data-dashboard-results]');
+    assert.match(results.textContent, /Card A/);
+    assert.doesNotMatch(results.textContent, /Card B/);
+    assert.match(results.textContent, /redeemed/);
+    dom.window.close();
+  }
+});
+
+function amexSyncFixture() {
+  const context = setup('https://global.americanexpress.com/offers/enrolled', { poll: 5, settle: 20, timeout: 180 });
+  const { w } = context;
+  w.document.body.innerHTML = `<div role="combobox" aria-label="Open to manage your other accounts">
+    <div data-testid="simple_switcher_selected_option_display" aria-label="Personal Gold Card ending in 1234."></div></div>
+    <input type="radio" name="offers-view" id="ENROLLED" checked><label for="ENROLLED">Added to Card</label>
+    <input type="radio" name="offers-view" id="REDEEMED"><label for="REDEEMED">Redeemed</label><main id="offer-list"></main>`;
+  const grid = w.document.getElementById('offer-list');
+  const render = redeemed => {
+    grid.innerHTML = `<div id="offer-nordstrom"><h3>Nordstrom</h3> <span>Spend $100, get $20 back</span>
+      <span>Expires 12/31/2026</span> ${redeemed ? '' : '<span>Added to Card</span>'} <button>View Details</button></div>`
+      + (redeemed ? '' : '<div id="offer-bestbuy"><h3>Best Buy</h3> <span>Spend $100, get $10 back</span> <span>Expires 12/31/2026</span> <span>Added to Card</span> <button>View Details</button> <button title="add to list card">Add to Card</button> <button>Redeem Now</button></div>');
+  };
+  render(false);
+  let activations = 0;
+  grid.addEventListener('click', event => { if (event.target.closest('button')) activations++; });
+  return { ...context, grid, renderGrid: render, activations: () => activations };
+}
+
+test('Amex Sync now visits only native Redeemed navigation and waits for settled current-card offers', async () => {
+  const { dom, w, api, grid, renderGrid, activations } = amexSyncFixture();
+  const root = api.mount().shadowRoot;
+  let navigationClicks = 0;
+  w.document.getElementById('REDEEMED').addEventListener('click', () => {
+    navigationClicks++;
+    assert.equal(root.querySelector('[data-amex-stop]').hidden, false);
+    grid.setAttribute('aria-busy', 'true');
+    assert.equal(api.syncCurrentBank(true), false);
+    w.setTimeout(() => { renderGrid(true); grid.removeAttribute('aria-busy'); }, 25);
+  });
+  assert.equal(await api.syncAmexWithRedeemed(), true);
+  assert.equal(navigationClicks, 1);
+  assert.equal(activations(), 0);
+  assert.equal(api.placements().find(item => item.name === 'Nordstrom').status, 'redeemed');
+  assert.equal(api.placements().find(item => item.name === 'Best Buy').status, 'added');
+  assert.equal(api.placements().every(item => item.card.endsWith('1234)')), true);
+  assert.equal(root.querySelector('[data-amex-stop]').hidden, true);
+  assert.match(root.querySelector('[data-notice]').textContent, /including redeemed/);
+  dom.window.close();
+});
+
+test('Amex Stop cancels the pending Redeemed read without activating any offer', async () => {
+  const { dom, w, api, activations } = amexSyncFixture();
+  const root = api.mount().shadowRoot;
+  w.document.getElementById('REDEEMED').addEventListener('click', () => api.stopAmexSync());
+  assert.equal(await api.syncAmexWithRedeemed(), false);
+  assert.equal(activations(), 0);
+  assert.equal(api.placements().every(item => item.status === 'added'), true);
+  assert.match(root.querySelector('[data-notice]').textContent, /stopped/i);
+  dom.window.close();
+});
+
+test('Amex sync rejects unchanged grids and passive polling cannot relabel stale Added tiles', async () => {
+  const { dom, api, activations } = amexSyncFixture();
+  const root = api.mount().shadowRoot;
+  assert.equal(await api.syncAmexWithRedeemed(), false);
+  for (let i = 0; i < 3; i++) api.syncCurrentBank(true);
+  assert.equal(api.placements().every(item => item.status === 'added'), true);
+  assert.equal(activations(), 0);
+  assert.match(root.querySelector('[data-notice]').textContent, /changed, settled/);
+  dom.window.close();
+});
+
+test('Amex selected-card changes abort pending redemption reads', async () => {
+  const { dom, w, api, renderGrid } = amexSyncFixture();
+  const root = api.mount().shadowRoot;
+  w.document.getElementById('REDEEMED').addEventListener('click', () => {
+    w.document.querySelector('[data-testid="simple_switcher_selected_option_display"]').setAttribute('aria-label', 'Business Platinum Card ending in 8765.');
+    renderGrid(true);
+  });
+  assert.equal(await api.syncAmexWithRedeemed(), false);
+  assert.equal(api.placements().every(item => item.status === 'added' && /1234/.test(item.card)), true);
+  assert.match(root.querySelector('[data-notice]').textContent, /selected Amex card changed/);
+  dom.window.close();
+});
+
+test('Amex sync retains visible data when native Redeemed navigation is unavailable or enrollment is active', async () => {
+  for (const active of [false, true]) {
+    const { dom, w, api, activations } = amexSyncFixture();
+    const root = api.mount().shadowRoot;
+    w.document.getElementById('REDEEMED').remove();
+    if (active) w.localStorage.setItem('amexNativeOfferClickerState.v1', JSON.stringify({ active: true }));
+    assert.equal(await api.syncAmexWithRedeemed(), false);
+    assert.equal(activations(), 0);
+    assert.match(root.querySelector('[data-notice]').textContent, active ? /Stop the Amex enrollment clicker/ : /No native Redeemed control/);
+    if (!active) assert.equal(api.placements().every(item => item.status === 'added'), true);
+    dom.window.close();
+  }
+});
+
+test('Amex first collection waits for nonloading settled data and rejects unidentified or mismatched cards', async () => {
+  const { dom, w, api, grid } = amexSyncFixture();
+  grid.setAttribute('aria-busy', 'true');
+  assert.equal(api.collectAmexPage(), false);
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(api.collectAmexPage(), false);
+  grid.removeAttribute('aria-busy');
+  assert.equal(api.collectAmexPage(), false);
+  await new Promise(resolve => setTimeout(resolve, 25));
+  assert.equal(api.collectAmexPage(), true);
+  dom.window.close();
+  for (const [selected, tileTail] of [['Unknown card', '1234'], ['Personal Gold Card ending in 1234.', '8765']]) {
+    const { dom, w, api } = setup('https://global.americanexpress.com/offers/enrolled');
+    w.document.body.innerHTML = `<div role="combobox" aria-label="Open to manage your other accounts"><div data-testid="simple_switcher_selected_option_display" aria-label="${selected}"></div></div>
+      <div id="offer-nordstrom"><h3>Nordstrom</h3> Spend $100, get $20 back Expires 12/31/2026 Added to Card ••••${tileTail} <button>View Details</button></div>`;
+    assert.equal(api.collectAmexPage(), false);
+    assert.equal(api.placements().length, 0);
+    dom.window.close();
+  }
+});
+
+test('Amex redeemed URL alone never identifies stale tiles as redeemed', () => {
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers/redeemed');
+  w.document.body.innerHTML = '<div data-testid="simple_switcher_wrapper">Test Card (...1234)</div><div id="offer-nordstrom"><h3>Nordstrom</h3> Spend $100, get $20 back Expires 12/31/2026 <button>View Details</button></div>';
+  assert.equal(api.collectAmexPage(), false);
+  assert.equal(api.placements().length, 0);
+  dom.window.close();
+});
+
+test('Amex activity rows on the redeemed page are captured only for the selected card', () => {
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers/redeemed?opaqueAccountId=test', { settle: 0 });
+  w.document.body.innerHTML = `<div role="combobox" aria-label="Open to manage your other accounts">
+    <div data-testid="simple_switcher_selected_option_display" aria-label="Platinum Card ending in 1234."></div></div>
+    <button data-testid="redeemedOffer-first"><span>Oct 25, 2026</span><span><span>Nordstrom</span><span>Card ending in ••••-1234</span></span><span>$50.00</span></button>
+    <button data-testid="redeemedOffer-other"><span>Oct 20, 2026</span><span><span>Kroger</span><span>Card ending in ••••-8765</span></span><span>$15.00</span></button>`;
+  assert.equal(api.collectAmexPage(), true);
+  api.syncCurrentBank(true);
+  const redeemed = api.placements().filter(item => item.status === 'redeemed');
+  assert.equal(redeemed.length, 1);
+  assert.equal(redeemed[0].name, 'Nordstrom');
+  assert.match(redeemed[0].description, /\$50\.00/);
+  assert.match(redeemed[0].card, /1234/);
+  dom.window.close();
+});
+
+test('Amex Sync now follows View Activity and reads redemption rows', async () => {
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers?opaqueAccountId=test', { poll: 5, settle: 0, timeout: 200 });
+  w.document.body.innerHTML = `<div role="combobox" aria-label="Open to manage your other accounts">
+    <div data-testid="simple_switcher_selected_option_display" aria-label="Platinum Card ending in 1234."></div></div>
+    <a id="savings-view-more-header" href="/offers/redeemed?opaqueAccountId=test">View Activity</a>`;
+  let clicked = 0;
+  w.document.querySelector('#savings-view-more-header').addEventListener('click', event => {
+    event.preventDefault();
+    clicked++;
+    w.history.pushState({}, '', '/offers/redeemed?opaqueAccountId=test');
+    w.document.body.insertAdjacentHTML('beforeend', `<button data-testid="redeemedOffer-first"><span>Oct 25, 2026</span>
+      <span><span>Nordstrom</span><span>Card ending in ••••-1234</span></span><span>$50.00</span></button>`);
+  });
+  assert.equal(await api.syncAmexWithRedeemed(), true);
+  assert.equal(clicked, 1);
+  assert.equal(api.placements().filter(item => item.status === 'redeemed').length, 1);
+  dom.window.close();
+});
+
+test('Amex ignores hidden redeemed badges and unrelated selected navigation', () => {
+  const { dom, w, api } = setup('https://global.americanexpress.com/dashboard');
+  w.document.body.innerHTML = `<div data-testid="simple_switcher_wrapper">Test Card (...1234)</div>
+    <input type="radio" id="REDEEMED" checked hidden>
+    <div role="tab" aria-selected="true">Account overview</div><div role="tab" aria-selected="true">Added to Card (2)</div>
+    <div id="offer-nordstrom"><h3>Nordstrom</h3> Spend $100, get $20 back Expires 12/31/2026
+      <span><span hidden>Redeemed</span></span><button>View Details</button></div>`;
+  api.syncCurrentBank(true);
+  assert.equal(api.placements()[0].status, 'added');
+  dom.window.close();
+});
+
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.13/);
+  assert.match(source, /@version\s+0\.1\.16/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);

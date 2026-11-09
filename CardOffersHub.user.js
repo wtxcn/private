@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Card Offers Hub
 // @namespace    https://github.com/wtxcn/private
-// @version      0.1.13
+// @version      0.1.16
 // @description  Combine card-offer snapshots from supported banks into one private local search hub.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -26,14 +26,36 @@
 function normalizeAmexOffers(offers) {
   const text = value => String(value || '').replace(/\s+/g, ' ').trim();
   const keyOf = value => text(value).normalize('NFKD').replace(/[^a-z0-9]+/gi, ' ').trim().toLowerCase();
+  const mergeStatus = (previous, status) => previous === 'redeemed' || status === 'redeemed' ? 'redeemed'
+    : previous === 'added' || status === 'added' ? 'added'
+      : previous && previous !== status ? 'unknown' : status;
+  const datePattern = '\\b(\\d{1,2})\\/(\\d{1,2})\\/(\\d{4}|\\d{2})\\b';
+  const expiryLabel = '(?:Expires?|Expiry(?: date)?|Expiration(?: date)?|Valid (?:through|until)|Offer ends?)';
+  const redeemedDate = new RegExp(`\\b(?:your offer has been redeemed|you have redeemed this offer|offer redeemed|redeemed)(?:\\s+on)?\\s+${datePattern}[.!]?`, 'ig');
+  const dateKey = date => {
+    if (!date) return '';
+    const year = Number(`${date[3].length === 2 ? '20' : ''}${date[3]}`);
+    const month = Number(date[1]);
+    const day = Number(date[2]);
+    const value = new Date(Date.UTC(year, month - 1, day));
+    return value.getUTCFullYear() === year && value.getUTCMonth() === month - 1 && value.getUTCDate() === day
+      ? `${year}-${date[1].padStart(2, '0')}-${date[2].padStart(2, '0')}` : '';
+  };
   const candidates = offers.map(offer => {
     const original = text(offer.description);
-    const date = original.match(/\b(\d{1,2})\/(\d{1,2})\/(\d{2}|\d{4})\b/);
-    const expiry = date && Number(date[1]) <= 12 && Number(date[2]) <= 31
-      ? `${date[3].length === 2 ? '20' : ''}${date[3]}-${date[1].padStart(2, '0')}-${date[2].padStart(2, '0')}` : '';
+    const hasRedeemed = Object.values(offer.cards || {}).includes('redeemed');
+    const explicitDate = original.match(new RegExp(`\\b${expiryLabel}\\s*:?\\s*${datePattern}`, 'i'));
+    // A date on a Redeemed tile may be the redemption date. Only a labelled
+    // expiry identifies its campaign; bare dates remain supported for old
+    // active-offer snapshots, whose collector omitted the Expires label.
+    const legacyDate = !hasRedeemed && !/\bredeemed\b/i.test(original)
+      ? original.match(new RegExp(datePattern)) : null;
+    const expiry = dateKey(explicitDate || legacyDate);
     let description = original
       .split(/\b(?:Your offer has been added|Remember to use your enrolled|Add to Card|Added to Card|Redeem Now|View Details|Card Details|Terms apply|Details)\b/i)[0]
-      .replace(/(?:Expires?\s*)?\b\d{1,2}\/\d{1,2}\/(?:\d{4}|\d{2})\b/ig, ' ');
+      .replace(redeemedDate, ' ')
+      .replace(new RegExp(`\\b${expiryLabel}\\s*:?\\s*${datePattern}`, 'ig'), ' ')
+      .replace(new RegExp(datePattern, 'g'), ' ');
     description = text(description);
     // The old collector concatenated a button's text with its parent's text.
     let repeated;
@@ -42,34 +64,63 @@ function normalizeAmexOffers(offers) {
       ? `amex|${keyOf(offer.name)}|${description.normalize('NFKC').toLowerCase()}` : null;
     const cards = { ...offer.cards };
     if (/\bYour offer has been added\b/i.test(original)) {
-      for (const id of Object.keys(cards)) cards[id] = 'added';
+      for (const id of Object.keys(cards)) if (cards[id] !== 'redeemed') cards[id] = 'added';
     }
-    return { ...offer, description, cards, base, expiry };
+    return { ...offer, description, cards, base, expiry, hasRedeemed };
   });
   const dates = new Map();
+  const redeemedBases = new Set(candidates.filter(item => item.hasRedeemed).map(item => item.base));
   for (const item of candidates) {
     if (!dates.has(item.base)) dates.set(item.base, new Set());
     if (item.expiry) dates.get(item.base).add(item.expiry);
   }
   const merged = new Map();
   for (const item of candidates) {
-    // Date-less legacy copies can join a known campaign only when unambiguous.
+    // Date-less legacy copies can join an unambiguous active campaign. Once
+    // redemption exists for these terms, either undated side may be a separate
+    // recurrence, so neither side can borrow a date from the other.
     const known = dates.get(item.base);
-    const expiry = item.expiry || (item.base && known.size === 1 ? [...known][0] : '');
-    const key = item.base ? `${item.base}|${expiry}` : item.key;
-    const prior = merged.get(key) || {
+    const expiry = item.expiry || (!redeemedBases.has(item.base) && item.base && known.size === 1 ? [...known][0] : '');
+    // Preserve unmatched bank redemption evidence without applying it to an
+    // Added copy (or a later recurrence) solely because the offer terms match.
+    const unresolvedKey = /^amex unresolved redemption\b/.test(keyOf(item.key))
+      ? item.key : `amex unresolved redemption ${keyOf(item.key || `${item.name} ${item.description}`)}`;
+    const key = item.hasRedeemed && !expiry ? unresolvedKey : item.base ? `${item.base}|${expiry}` : item.key;
+    const entry = merged.get(key) || { base: item.base, expiry, stub: !item.base && !item.description, offer: {
       key, name: item.name,
       description: item.description + (expiry ? ` Expires ${expiry.slice(5, 7)}/${expiry.slice(8)}/${expiry.slice(0, 4)}` : ''),
       cards: {}
-    };
+    } };
+    const prior = entry.offer;
     for (const [id, status] of Object.entries(item.cards)) {
-      const previous = prior.cards[id];
-      prior.cards[id] = status === 'added' || previous === 'added' ? 'added'
-        : previous && previous !== status ? 'unknown' : status;
+      prior.cards[id] = mergeStatus(prior.cards[id], status);
     }
-    merged.set(key, prior);
+    merged.set(key, entry);
   }
-  return [...merged.values()];
+  const entries = [...merged.values()];
+  const campaigns = new Map();
+  const campaignKey = (entry, id) => JSON.stringify([keyOf(entry.offer.name), entry.expiry, id]);
+  for (const entry of entries) {
+    if (!entry.base || !entry.expiry) continue;
+    for (const id of Object.keys(entry.offer.cards)) {
+      const key = campaignKey(entry, id);
+      if (!campaigns.has(key)) campaigns.set(key, []);
+      campaigns.get(key).push(entry.offer);
+    }
+  }
+  for (const entry of entries) {
+    if (!entry.stub || !entry.expiry) continue;
+    for (const [id, status] of Object.entries(entry.offer.cards)) {
+      // Missing terms identify a campaign only with the same card, merchant and
+      // explicit expiry, and only when there is exactly one possible campaign.
+      const matches = campaigns.get(campaignKey(entry, id)) || [];
+      if (matches.length !== 1) continue;
+      const target = matches[0];
+      target.cards[id] = mergeStatus(target.cards[id], status);
+      delete entry.offer.cards[id];
+    }
+  }
+  return entries.map(entry => entry.offer).filter(offer => Object.keys(offer.cards).length);
 }
 // END AMEX NORMALIZATION
 
@@ -105,6 +156,10 @@ function normalizeAmexOffers(offers) {
   let lastSourceText = "";
   let dragState = null;
   let serverSyncTimer = null;
+  let amexScan = null;
+  let amexLastPage = null;
+  let amexPendingPage = null;
+  const AMEX_SCAN_TIMING = globalThis.__CARD_OFFERS_HUB_TEST__?.amexTiming || { poll: 100, settle: 750, timeout: 15000 };
 
   const escapeHtml = value => String(value ?? "").replace(/[&<>"']/g, character => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[character]);
   const normalize = value => String(value || "").normalize("NFKD").replace(/[^a-z0-9]+/gi, " ").trim().toLowerCase();
@@ -212,7 +267,7 @@ function normalizeAmexOffers(offers) {
       const states = {};
       for (const [rawId, status] of Object.entries(offer.cards)) {
         const id = ids.get(String(rawId));
-        if (id && ["addable", "added", "unknown"].includes(status)) states[id] = status;
+        if (id && ["addable", "added", "redeemed", "unknown"].includes(status)) states[id] = status;
       }
       return {
         key: normalize(offer.key || offer.name),
@@ -243,6 +298,7 @@ function normalizeAmexOffers(offers) {
       if (card.complete === true && scannedAt > 0) replaced.add(card.id);
       cards.set(card.id, { ...card, scannedAt });
     }
+    const previousOffers = new Map(existing.offers.map(offer => [offer.key, offer]));
     const offers = new Map(existing.offers.map(offer => [offer.key, { ...offer, cards: { ...offer.cards } }]));
     for (const offer of offers.values()) {
       for (const id of replaced) delete offer.cards[id];
@@ -252,7 +308,12 @@ function normalizeAmexOffers(offers) {
       prior.name = offer.name || prior.name;
       prior.description = offer.description || prior.description;
       for (const [id, status] of Object.entries(offer.cards)) {
-        if (accepted.has(id)) prior.cards[id] = cleanIncoming.bank === 'amex' && prior.cards[id] === 'added' ? 'added' : status;
+        if (!accepted.has(id)) continue;
+        const previous = prior.cards[id] || previousOffers.get(offer.key)?.cards[id];
+        prior.cards[id] = cleanIncoming.bank === 'amex'
+          ? previous === 'redeemed' || status === 'redeemed' ? 'redeemed'
+            : previous === 'added' || status === 'added' ? 'added' : status
+          : status;
       }
       offers.set(offer.key, prior);
     }
@@ -275,10 +336,14 @@ function normalizeAmexOffers(offers) {
     return null;
   }
 
-  function syncCurrentBank(force = false) {
+  function syncCurrentBank(force = false, scanContext = null) {
     const bank = currentBank();
     if (!bank) return false;
-    if (bank === "amex") collectAmexPage();
+    if (bank === "amex") {
+      if (amexScan && scanContext?.run !== amexScan) return false;
+      collectAmexPage(scanContext);
+      if (amexPendingPage) return false;
+    }
     const source = sourceFromStorage(bank);
     if (!source?.snapshot) return false;
     const sourceText = JSON.stringify(source);
@@ -303,17 +368,38 @@ function normalizeAmexOffers(offers) {
     return true;
   }
 
-  function collectAmexPage() {
-    if (currentBank() !== "amex") return false;
+  function selectedAmexCard() {
     const cardControl = document.querySelector('[role="combobox"][aria-label*="manage your other accounts" i], [data-testid="simple_switcher_combobox"], [data-testid="simple_switcher_wrapper"]');
     const selectedCard = cardControl?.querySelector?.('[data-testid="simple_switcher_selected_option_display"]')
       || document.querySelector('[data-testid="simple_switcher_selected_option_display"]');
     const selectedLabel = selectedCard?.getAttribute("aria-label") || "";
-    const currentCardName = safeCardName(selectedLabel.replace(/\s+ending in\s+(\d{4,5})\.?$/i, " (...$1)") || cardControl?.textContent || "Amex Card");
-    const currentTail = currentCardName.match(/(\d{4,5})\D*$/)?.[1] || "current";
-    const currentCardId = `amex:${normalize(currentCardName)}:${currentTail}`;
-    const eligibleView = Boolean(document.querySelector('#ELIGIBLE:checked, [id="ELIGIBLE"][aria-checked="true"]'));
-    const enrolledPage = /\/offers\/enrolled(?:\/|$)/i.test(location.pathname);
+    const label = selectedLabel || selectedCard?.textContent || (!cardControl?.querySelector('[role="option"]') ? cardControl?.textContent : "");
+    const name = safeCardName(String(label || "Amex Card").replace(/\s+ending in\s+(\d{4,5})\.?$/i, " (...$1)"));
+    const tail = name.match(/(\d{4,5})\D*$/)?.[1] || "";
+    return { id: `amex:${normalize(name)}:${tail || 'current'}`, name, tail, control: cardControl };
+  }
+
+  function amexElementVisible(element) {
+    for (let node = element; node instanceof Element; node = node.parentElement) {
+      if (node.hidden || node.getAttribute('aria-hidden') === 'true') return false;
+      const style = getComputedStyle(node);
+      if (style.display === 'none' || style.visibility === 'hidden') return false;
+    }
+    return true;
+  }
+
+  function amexText(element) {
+    if (!element) return '';
+    if (typeof element.innerText === 'string') return element.innerText.replace(/\s+/g, ' ').trim();
+    const walker = document.createTreeWalker(element, NodeFilter.SHOW_TEXT);
+    let text = '';
+    for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+      if (node.parentElement && amexElementVisible(node.parentElement)) text += node.textContent;
+    }
+    return text.replace(/\s+/g, ' ').trim();
+  }
+
+  function amexOfferTiles() {
     const tiles = Array.from(document.querySelectorAll('[id^="offer-"]:not(#offer-view-menu)')).filter(tile => tile.querySelector("button, img"));
     const addButtons = Array.from(document.querySelectorAll('button[title="add to list card"]'));
     const detailButtons = Array.from(document.querySelectorAll('[data-testid="merchantOfferDetailsLink"], button')).filter(button => /view details/i.test(button.textContent || ""));
@@ -326,29 +412,231 @@ function normalizeAmexOffers(offers) {
       }
       if (tile && !tiles.includes(tile)) tiles.push(tile);
     }
+    return tiles.filter(amexElementVisible);
+  }
+
+  function amexRedemptionRows() {
+    if (!/^\/offers\/redeemed\/?$/i.test(location.pathname)) return [];
+    return Array.from(document.querySelectorAll('button[data-testid^="redeemedOffer-"]')).filter(amexElementVisible);
+  }
+
+  function amexView(allowPath = true) {
+    for (const [view, id] of [['addable', 'ELIGIBLE'], ['added', 'ENROLLED'], ['redeemed', 'REDEEMED']]) {
+      const control = document.getElementById(id);
+      const visible = control && (amexElementVisible(control) || Array.from(document.querySelectorAll('label')).some(label => label.htmlFor === id && amexElementVisible(label)));
+      if (visible && (control.checked || control.getAttribute('aria-checked') === 'true' || control.getAttribute('aria-selected') === 'true' || control.getAttribute('aria-pressed') === 'true')) return view;
+    }
+    for (const selectedTab of document.querySelectorAll('[role="tab"][aria-selected="true"], [role="radio"][aria-checked="true"], button[aria-pressed="true"], a[aria-current="page"]')) {
+      if (!amexElementVisible(selectedTab)) continue;
+      const label = (selectedTab.getAttribute('aria-label') || selectedTab.textContent || '').replace(/\s*\(\d+\)\s*$/, '').trim();
+      if (/^redeemed$/i.test(label)) return 'redeemed';
+      if (/^(?:added to card|added)$/i.test(label)) return 'added';
+      if (/^available$/i.test(label)) return 'addable';
+    }
+    if (!allowPath) return '';
+    if (/\/offers\/redeemed(?:\/|$)/i.test(location.pathname)) return 'redeemed';
+    if (/\/offers\/enrolled(?:\/|$)/i.test(location.pathname)) return 'added';
+    if (/\/offers\/?$/i.test(location.pathname)) return 'addable';
+    return '';
+  }
+
+  function amexGrid() {
+    const activity = amexRedemptionRows();
+    if (activity.length) return JSON.stringify(activity.map(amexText));
+    const tiles = amexOfferTiles();
+    if (tiles.length) return JSON.stringify(tiles.map(amexText));
+    const empty = Array.from(document.querySelectorAll('p, h2, h3, [role="status"], [data-testid]')).find(element => amexElementVisible(element)
+      && /^(?:you (?:have|currently have) no redeemed offers|no redeemed offers|you haven't redeemed any offers(?: yet)?)[.!]?$/i.test((element.textContent || '').trim()));
+    return empty ? `empty:${empty.textContent.trim()}` : '';
+  }
+
+  function amexLoading() {
+    return Array.from(document.querySelectorAll('[aria-busy="true"], [role="progressbar"], [data-testid*="loading" i]')).some(amexElementVisible);
+  }
+
+  function amexReadReady(card, view) {
+    const grid = amexGrid();
+    const target = `${card.id}|${view}`;
+    if (!card.tail || !grid || amexLoading()) {
+      if (amexPendingPage) { amexPendingPage.grid = ''; amexPendingPage.since = 0; }
+      return false;
+    }
+    if (!amexPendingPage && (!amexLastPage || target !== amexLastPage.target)) {
+      amexPendingPage = { target, previousGrid: amexLastPage?.grid ?? null, grid: '', since: 0 };
+    }
+    if (amexPendingPage) {
+      const pending = amexPendingPage;
+      if (pending.target !== target) {
+        amexPendingPage = { target, previousGrid: amexLastPage?.grid || pending.previousGrid, grid: '', since: 0 };
+        return false;
+      }
+      if (grid === pending.previousGrid) { pending.grid = ''; pending.since = 0; return false; }
+      if (grid !== pending.grid) { pending.grid = grid; pending.since = Date.now(); }
+      if (Date.now() - pending.since < AMEX_SCAN_TIMING.settle) return false;
+      amexPendingPage = null;
+    }
+    amexLastPage = { target, grid };
+    return true;
+  }
+
+  function amexRedeemedControl() {
+    const activityLink = document.querySelector('a#savings-view-more-header[href]');
+    if (activityLink && amexElementVisible(activityLink)) {
+      const url = new URL(activityLink.href, location.href);
+      if (url.origin === location.origin && /^\/offers\/redeemed\/?$/i.test(url.pathname)
+        && url.searchParams.get('opaqueAccountId') === new URL(location.href).searchParams.get('opaqueAccountId')) return activityLink;
+    }
+    const explicit = document.getElementById('REDEEMED');
+    const label = explicit?.id && Array.from(document.querySelectorAll('label')).find(candidate => candidate.htmlFor === explicit.id && amexElementVisible(candidate));
+    const controls = [label, explicit, ...document.querySelectorAll('[role="tab"], [role="radio"], button, a[href]')].filter(Boolean);
+    return controls.find(control => {
+      if (!amexElementVisible(control) || control.closest('[id^="offer-"]:not(#offer-view-menu)') || control.disabled) return false;
+      if (control === label) return explicit?.matches('input[type="radio"], [role="radio"], [role="tab"]');
+      if (control === explicit && control.matches('input[type="radio"], button, [role="radio"], [role="tab"]')) return true;
+      const name = (control.getAttribute('aria-label') || control.textContent || '').replace(/\s*\(\d+\)\s*$/, '').trim();
+      if (!/^redeemed$/i.test(name)) return false;
+      if (control.matches('a[href]')) {
+        const url = new URL(control.href, location.href);
+        const currentAccount = new URL(location.href).searchParams.get('opaqueAccountId');
+        const targetAccount = url.searchParams.get('opaqueAccountId');
+        return url.origin === location.origin && /^\/offers\/redeemed\/?$/i.test(url.pathname)
+          && !(currentAccount && targetAccount && currentAccount !== targetAccount);
+      }
+      return control.matches('button, [role="tab"], [role="radio"]');
+    });
+  }
+
+  function checkAmexScan(run) {
+    if (run.cancelled || amexScan !== run) throw new Error('Amex sync stopped.');
+    if (readJson(localStorage.getItem('amexNativeOfferClickerState.v1'))?.active) throw new Error('Stop the Amex enrollment clicker before syncing.');
+    if (selectedAmexCard().id !== run.card.id) throw new Error('The selected Amex card changed. Sync stopped to keep card records separate.');
+  }
+
+  function stopAmexSync() {
+    if (!amexScan) return;
+    amexScan.cancelled = true;
+    notice = 'Stopping Amex sync';
+    render();
+  }
+
+  async function waitForAmexRead(run, view) {
+    const deadline = Date.now() + AMEX_SCAN_TIMING.timeout;
+    let stableGrid = '';
+    let stableSince = 0;
+    while (Date.now() < deadline) {
+      checkAmexScan(run);
+      const grid = amexGrid();
+      if (amexView() === view && grid && !amexLoading() && amexReadReady(run.card, view)) {
+        if (grid !== stableGrid) { stableGrid = grid; stableSince = Date.now(); }
+        else if (Date.now() - stableSince >= AMEX_SCAN_TIMING.settle) return;
+      } else { stableGrid = ''; stableSince = 0; }
+      await new Promise(resolve => setTimeout(resolve, AMEX_SCAN_TIMING.poll));
+    }
+    throw new Error('Amex did not confirm a changed, settled offer list. Existing statuses retained.');
+  }
+
+  async function syncAmexWithRedeemed() {
+    if (currentBank() !== 'amex' || amexScan) return false;
+    const card = selectedAmexCard();
+    if (!card.tail) { notice = 'Select an identifiable Amex card before syncing.'; render(); return false; }
+    const run = { card, cancelled: false };
+    amexScan = run;
+    try {
+      checkAmexScan(run);
+      notice = `Reading Amex offers: ${card.name}`;
+      render();
+      const initialView = amexView();
+      if (initialView && amexGrid()) {
+        await waitForAmexRead(run, initialView);
+        syncCurrentBank(true, { run, card, view: initialView });
+      }
+      const control = amexRedeemedControl();
+      const alreadyRedeemed = amexView(false) === 'redeemed';
+      if (!alreadyRedeemed && !control) throw new Error('Visible offers synced. No native Redeemed control was found on this page.');
+      notice = `Syncing redeemed offers: ${card.name}`;
+      render();
+      if (!alreadyRedeemed) {
+        const previousGrid = amexGrid();
+        amexPendingPage = { target: `${card.id}|redeemed`, previousGrid, grid: '', since: 0 };
+        checkAmexScan(run);
+        // Only the native read-only Redeemed navigation is clicked.
+        control.click();
+      }
+      await waitForAmexRead(run, 'redeemed');
+      checkAmexScan(run);
+      syncCurrentBank(true, { run, card, view: 'redeemed', verifiedRedeemed: true });
+      notice = `Amex synced, including redeemed offers: ${card.name}`;
+      return true;
+    } catch (error) {
+      notice = error.message;
+      return false;
+    } finally {
+      if (amexScan === run) amexScan = null;
+      render();
+      renderDashboard();
+    }
+  }
+
+  function collectAmexPage(scanContext = null) {
+    if (currentBank() !== "amex" || (amexScan && scanContext?.run !== amexScan)) return false;
+    const card = selectedAmexCard();
+    if (!card.tail) return false;
+    if (scanContext && (card.id !== scanContext.card.id || amexView() !== scanContext.view)) return false;
+    const currentCardName = card.name;
+    const currentTail = card.tail || 'current';
+    const currentCardId = card.id;
+    const view = amexView();
+    if (!amexReadReady(card, view)) return false;
+    const activity = view === 'redeemed' ? amexRedemptionRows() : [];
+    if (activity.length) {
+      const offers = activity.map(row => {
+        const cells = Array.from(row.children).map(amexText);
+        const date = cells[0] || '';
+        const merchant = row.children[1]?.querySelector('span')?.textContent?.trim() || '';
+        const tail = (cells[1] || '').match(/Card ending in\s*[•·*\s-]*(\d{4,5})/i)?.[1];
+        const amount = (cells[2] || '').match(/\$[\d,]+(?:\.\d{2})?/)?.[0];
+        if (!merchant || !tail || tail !== card.tail || !amount || !/^[A-Za-z]{3} \d{1,2}, \d{4}$/.test(date)) return null;
+        return { key: normalize(`amex activity|${card.id}|${merchant}|${date}|${amount}`), name: merchant,
+          description: `Statement credit ${amount} earned ${date}`, cards: { [card.id]: 'redeemed' } };
+      }).filter(Boolean);
+      if (!offers.length) return false;
+      return saveAmexOffers(card, offers);
+    }
+    const redeemedByView = view === 'redeemed' && (amexView(false) === 'redeemed' || scanContext?.verifiedRedeemed === true);
+    const tiles = amexOfferTiles();
     if (!tiles.length) return false;
-    const cardsFound = new Map([[currentCardId, { id: currentCardId, name: currentCardName }]]);
     const offers = tiles.map(tile => {
-      const tileText = (tile.innerText || tile.textContent || "").replace(/\s+/g, " ").trim();
+      const tileText = amexText(tile);
       const headingName = tile.querySelector("h2, h3, h4")?.textContent?.replace(/\s+/g, " ").trim() || "";
       const imageName = tile.querySelector("img[alt]")?.getAttribute("alt")?.replace(/\s+/g, " ").trim() || "";
       const addedTail = tileText.match(/Added to Card\s*[•·*\s]*(\d{4,5})/i)?.[1] || "";
-      const tail = addedTail || currentTail;
-      const cardName = addedTail && addedTail !== currentTail ? `Amex Card (...${addedTail})` : currentCardName;
-      const cardId = addedTail && addedTail !== currentTail ? `amex:card:${addedTail}` : currentCardId;
-      cardsFound.set(cardId, { id: cardId, name: cardName });
+      // Do not create a second identity or transfer another card's tile status.
+      if (addedTail && addedTail !== currentTail) return null;
+      const cardId = currentCardId;
       const fallbackName = tileText.split(/\b(?:spend|earn|get|save)\b/i)[0].replace(/^\d+\s+of\s+\d+\s+/i, "").trim();
       const name = (headingName || imageName || fallbackName || "Amex offer").slice(0, 180);
       let description = tileText;
       for (const label of new Set([headingName, imageName].filter(Boolean))) description = description.replaceAll(label, " ");
+      // An exact badge or the selected Redeemed view is evidence of redemption.
+      // "Redeem Now" and redemption instructions in the offer terms are not.
+      const redeemedLabels = Array.from(tile.querySelectorAll('*')).filter(amexElementVisible).map(amexText)
+        .filter(label => /^(?:redeemed|offer redeemed|your offer has been redeemed|you have redeemed this offer)(?:[.!]|(?:\s+on)?\s+\d{1,2}\/\d{1,2}\/(?:\d{4}|\d{2})[.!]?)?$/i.test(label));
+      for (const label of new Set(redeemedLabels)) description = description.replaceAll(label, ' ');
+      if (view === 'redeemed' && !redeemedByView && !redeemedLabels.length) return null;
       description = description.replace(/\s+/g, " ").trim().slice(0, 300);
-      const status = enrolledPage || /Added to Card|Your offer has been added/i.test(tileText) ? "added"
-        : tile.querySelector('button[title="add to list card"]') || eligibleView ? "addable" : "unknown";
+      const status = redeemedByView || redeemedLabels.length ? "redeemed"
+        : view === 'added' || /Added to Card|Your offer has been added/i.test(tileText) ? "added"
+        : tile.querySelector('button[title="add to list card"]') || view === 'addable' ? "addable" : "unknown";
       return { key: normalize(`${name}|${description}`), name, description, cards: { [cardId]: status } };
-    }).filter(offer => offer.key);
+    }).filter(offer => offer?.key);
+    if (!offers.length) return false;
+    return saveAmexOffers(card, offers);
+  }
+
+  function saveAmexOffers(card, offers) {
     const old = readJson(localStorage.getItem(BANKS.amex.source), { snapshot: { cards: [], offers: [] } });
     const cards = new Map((old.snapshot?.cards || []).map(card => [String(card.id), card]));
-    for (const [id, card] of cardsFound) cards.set(id, card);
+    cards.set(card.id, { id: card.id, name: card.name });
     const nextOffers = normalizeAmexOffers([...(old.snapshot?.offers || []), ...offers]);
     const priorContent = JSON.stringify({ cards: old.snapshot?.cards || [], offers: old.snapshot?.offers || [] });
     const nextContent = JSON.stringify({ cards: [...cards.values()], offers: nextOffers });
@@ -499,12 +787,14 @@ function normalizeAmexOffers(offers) {
     const groups = groupedResults();
     const banks = new Set(items.map(item => item.bank)).size;
     const current = currentBank();
+    root.querySelector('[data-sync]').disabled = Boolean(amexScan);
+    root.querySelector('[data-amex-stop]').hidden = !amexScan;
     root.querySelector("[data-current-bank]").innerHTML = current
       ? `<span>Syncing ${escapeHtml(BANKS[current].name)} offers by bank and card</span>`
       : '<span>Open a supported bank page to sync new scans.</span>';
     root.querySelector("[data-stats]").innerHTML = `<div><b>${banks}</b><span>Banks</span></div><div><b>${groups.length}</b><span>Matches</span></div><div><b>${filteredPlacements().length}</b><span>Cards</span></div>`;
     root.querySelector("[data-bank-filters]").innerHTML = ["all", ...Object.keys(BANKS)].map(value => `<button class="chip ${bankFilter === value ? "active" : ""}" data-bank-filter="${value}">${value === "all" ? "All banks" : BANKS[value].name}</button>`).join("");
-    root.querySelector("[data-status-filters]").innerHTML = ["all", "addable", "added", "unknown"].map(value => `<button class="chip ${statusFilter === value ? "active" : ""}" data-status-filter="${value}">${value === "all" ? "Any status" : value === "unknown" ? "Unverified" : value[0].toUpperCase() + value.slice(1)}</button>`).join("");
+    root.querySelector("[data-status-filters]").innerHTML = ["all", "addable", "added", "redeemed", "unknown"].map(value => `<button class="chip ${statusFilter === value ? "active" : ""}" data-status-filter="${value}">${value === "all" ? "Any status" : value === "unknown" ? "Unverified" : value[0].toUpperCase() + value.slice(1)}</button>`).join("");
     root.querySelector("[data-results]").innerHTML = groups.map(group => `<article class="offer"><div class="offer-title"><div><strong>${escapeHtml(group.name)}</strong><span>${group.rows.length} card offer${group.rows.length === 1 ? "" : "s"}</span></div><b>${group.rows.length}</b></div><div class="placements">${group.rows.map(item => {
       const terms = [normalize(item.name) === normalize(group.name) ? "" : item.name, item.description].filter(Boolean).join(" · ");
       return `<div class="placement"><span class="bank" style="--bank:${BANKS[item.bank]?.color || "#64748b"}">${escapeHtml(BANKS[item.bank]?.name || item.bank)}</span><span class="card"><strong>${escapeHtml(item.card)}</strong>${terms ? `<small>${escapeHtml(terms)}</small>` : ""}</span><span class="state ${item.status}">${item.status === "unknown" ? "Unverified" : item.status}</span><time>${relativeTime(item.scannedAt)}</time></div>`;
@@ -522,7 +812,7 @@ function normalizeAmexOffers(offers) {
     const lastUpdated = Math.max(0, ...items.map(item => Number(item.scannedAt) || 0));
     dashboardRoot.querySelector("[data-dashboard-stats]").innerHTML = `<div><b>${Object.keys(getData().snapshots).length}</b><span>Banks</span></div><div><b>${cardCount}</b><span>Cards</span></div><div><b>${groups.length}</b><span>Offers</span></div><div><b>${filtered.length}</b><span>Matches</span></div>`;
     dashboardRoot.querySelector("[data-dashboard-bank-filters]").innerHTML = ["all", ...Object.keys(BANKS)].map(value => `<button class="filter ${bankFilter === value ? "active" : ""}" data-bank-filter="${value}"><span class="dot" style="--dot:${value === "all" ? "#64748b" : BANKS[value].color}"></span>${value === "all" ? "All banks" : BANKS[value].name}</button>`).join("");
-    dashboardRoot.querySelector("[data-dashboard-status-filters]").innerHTML = ["all", "addable", "added", "unknown"].map(value => `<button class="filter ${statusFilter === value ? "active" : ""}" data-status-filter="${value}">${value === "all" ? "Any status" : value === "unknown" ? "Unverified" : value[0].toUpperCase() + value.slice(1)}</button>`).join("");
+    dashboardRoot.querySelector("[data-dashboard-status-filters]").innerHTML = ["all", "addable", "added", "redeemed", "unknown"].map(value => `<button class="filter ${statusFilter === value ? "active" : ""}" data-status-filter="${value}">${value === "all" ? "Any status" : value === "unknown" ? "Unverified" : value[0].toUpperCase() + value.slice(1)}</button>`).join("");
     dashboardRoot.querySelector("[data-dashboard-updated]").textContent = lastUpdated ? `Updated ${relativeTime(lastUpdated)}` : "No scans yet";
     dashboardRoot.querySelector("[data-dashboard-results]").innerHTML = groups.map(group => `<section class="result-group"><header><div><h2>${escapeHtml(group.name)}</h2><span>${group.rows.length} card offer${group.rows.length === 1 ? "" : "s"}</span></div><b>${group.rows.length}</b></header><div class="table-head"><span>Bank</span><span>Card</span><span>Offer</span><span>Status</span><span>Updated</span></div>${group.rows.map(item => {
       const terms = [normalize(item.name) === normalize(group.name) ? "" : item.name, item.description].filter(Boolean).join(" · ");
@@ -535,7 +825,7 @@ function normalizeAmexOffers(offers) {
     dashboard.id = DASHBOARD_ID;
     dashboardRoot = dashboard.attachShadow({ mode: "open" });
     dashboardRoot.innerHTML = `<style>
-      :host{position:fixed;z-index:2147483647;inset:0;display:block;overflow:auto;background:#f4f6f8;color:#152238;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color-scheme:light}*{box-sizing:border-box;letter-spacing:0}button,input{font:inherit}svg{display:block;width:19px;height:19px}.topbar{position:sticky;z-index:3;top:0;display:flex;align-items:center;gap:14px;min-height:68px;padding:12px 24px;border-bottom:1px solid #dce2e8;background:#fff}.brand{display:grid;width:40px;height:40px;place-items:center;border-radius:7px;background:#102e57;color:#fff}.heading{min-width:0}.heading h1{margin:0;color:#0b2548;font-size:20px;line-height:1.2}.heading p{margin:2px 0 0;color:#718096;font-size:12px}.updated{margin-left:auto;color:#65758a;font-size:12px}.action{display:inline-flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid #ccd5df;border-radius:6px;background:#fff;color:#29425f;font-weight:700;cursor:pointer}.layout{display:grid;grid-template-columns:230px minmax(0,1fr);min-height:calc(100dvh - 68px)}.sidebar{padding:20px 16px;border-right:1px solid #dce2e8;background:#fff}.side-title{margin:0 0 8px;color:#758196;font-size:10px;font-weight:800;text-transform:uppercase}.filter-list{display:grid;gap:3px;margin-bottom:22px}.filter{display:flex;align-items:center;gap:8px;width:100%;padding:8px 9px;border:0;border-radius:6px;background:transparent;color:#40516a;text-align:left;cursor:pointer}.filter:hover{background:#f0f4f8}.filter.active{background:#e8f0f8;color:#0b315f;font-weight:800}.dot{width:8px;height:8px;border-radius:50%;background:var(--dot)}.privacy{margin-top:24px;padding-top:14px;border-top:1px solid #e4e8ed;color:#8490a0;font-size:11px}.content{min-width:0;padding:20px 24px 40px}.search-row{display:flex;align-items:center;gap:12px}.search-box{display:flex;align-items:center;gap:9px;max-width:720px;flex:1;padding:10px 12px;border:1px solid #cbd5e0;border-radius:7px;background:#fff;color:#718096}.search-box input{width:100%;min-width:0;border:0;outline:0;color:#17273d;font-size:15px}.stats{display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:8px;margin:14px 0 18px}.stats div{padding:10px 12px;border:1px solid #dce2e8;border-radius:7px;background:#fff}.stats b,.stats span{display:block}.stats b{color:#0b315f;font-size:21px}.stats span{color:#78869a;font-size:11px}.results{display:grid;gap:10px}.result-group{overflow:hidden;border:1px solid #dce2e8;border-radius:7px;background:#fff}.result-group>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 14px;border-bottom:1px solid #e8ecf0}.result-group h2{margin:0;color:#102e57;font-size:16px;line-height:1.25}.result-group header span{color:#7d8999;font-size:11px}.result-group header>b{color:#53657a}.table-head,.table-row{display:grid;grid-template-columns:90px minmax(150px,.8fr) minmax(240px,1.5fr) 88px 64px;align-items:center;gap:10px;padding:8px 14px}.table-head{background:#f7f9fb;color:#7b8798;font-size:10px;font-weight:800;text-transform:uppercase}.table-row{min-height:48px;border-top:1px solid #edf0f3;font-size:12px}.table-row:first-of-type{border-top:0}.bank-name{padding-left:8px;border-left:3px solid var(--bank);font-weight:800}.table-row strong{overflow-wrap:anywhere}.terms{color:#4f5f73;overflow-wrap:anywhere}.status{font-weight:800;text-transform:capitalize}.status.added{color:#28784f}.status.addable{color:#0874cf}.status.unknown{color:#9a5b13}.table-row time{color:#8490a0;text-align:right}.dashboard-empty{padding:80px 24px;color:#718096;text-align:center}@media(max-width:800px){.topbar{padding:10px 14px}.updated{display:none}.layout{grid-template-columns:1fr}.sidebar{position:static;padding:12px 14px;border-right:0;border-bottom:1px solid #dce2e8}.filter-list{display:flex;flex-wrap:wrap;margin-bottom:10px}.filter{width:auto;border:1px solid #dce2e8}.privacy,.side-title{display:none}.content{padding:14px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.table-head{display:none}.table-row{grid-template-columns:80px minmax(0,1fr) 82px}.terms{grid-column:2/4}.table-row time{display:none}.action span{display:none}}
+      :host{position:fixed;z-index:2147483647;inset:0;display:block;overflow:auto;background:#f4f6f8;color:#152238;font:14px/1.45 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color-scheme:light}*{box-sizing:border-box;letter-spacing:0}button,input{font:inherit}svg{display:block;width:19px;height:19px}.topbar{position:sticky;z-index:3;top:0;display:flex;align-items:center;gap:14px;min-height:68px;padding:12px 24px;border-bottom:1px solid #dce2e8;background:#fff}.brand{display:grid;width:40px;height:40px;place-items:center;border-radius:7px;background:#102e57;color:#fff}.heading{min-width:0}.heading h1{margin:0;color:#0b2548;font-size:20px;line-height:1.2}.heading p{margin:2px 0 0;color:#718096;font-size:12px}.updated{margin-left:auto;color:#65758a;font-size:12px}.action{display:inline-flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid #ccd5df;border-radius:6px;background:#fff;color:#29425f;font-weight:700;cursor:pointer}.layout{display:grid;grid-template-columns:230px minmax(0,1fr);min-height:calc(100dvh - 68px)}.sidebar{padding:20px 16px;border-right:1px solid #dce2e8;background:#fff}.side-title{margin:0 0 8px;color:#758196;font-size:10px;font-weight:800;text-transform:uppercase}.filter-list{display:grid;gap:3px;margin-bottom:22px}.filter{display:flex;align-items:center;gap:8px;width:100%;padding:8px 9px;border:0;border-radius:6px;background:transparent;color:#40516a;text-align:left;cursor:pointer}.filter:hover{background:#f0f4f8}.filter.active{background:#e8f0f8;color:#0b315f;font-weight:800}.dot{width:8px;height:8px;border-radius:50%;background:var(--dot)}.privacy{margin-top:24px;padding-top:14px;border-top:1px solid #e4e8ed;color:#8490a0;font-size:11px}.content{min-width:0;padding:20px 24px 40px}.search-row{display:flex;align-items:center;gap:12px}.search-box{display:flex;align-items:center;gap:9px;max-width:720px;flex:1;padding:10px 12px;border:1px solid #cbd5e0;border-radius:7px;background:#fff;color:#718096}.search-box input{width:100%;min-width:0;border:0;outline:0;color:#17273d;font-size:15px}.stats{display:grid;grid-template-columns:repeat(4,minmax(100px,1fr));gap:8px;margin:14px 0 18px}.stats div{padding:10px 12px;border:1px solid #dce2e8;border-radius:7px;background:#fff}.stats b,.stats span{display:block}.stats b{color:#0b315f;font-size:21px}.stats span{color:#78869a;font-size:11px}.results{display:grid;gap:10px}.result-group{overflow:hidden;border:1px solid #dce2e8;border-radius:7px;background:#fff}.result-group>header{display:flex;align-items:center;justify-content:space-between;gap:16px;padding:12px 14px;border-bottom:1px solid #e8ecf0}.result-group h2{margin:0;color:#102e57;font-size:16px;line-height:1.25}.result-group header span{color:#7d8999;font-size:11px}.result-group header>b{color:#53657a}.table-head,.table-row{display:grid;grid-template-columns:90px minmax(150px,.8fr) minmax(240px,1.5fr) 88px 64px;align-items:center;gap:10px;padding:8px 14px}.table-head{background:#f7f9fb;color:#7b8798;font-size:10px;font-weight:800;text-transform:uppercase}.table-row{min-height:48px;border-top:1px solid #edf0f3;font-size:12px}.table-row:first-of-type{border-top:0}.bank-name{padding-left:8px;border-left:3px solid var(--bank);font-weight:800}.table-row strong{overflow-wrap:anywhere}.terms{color:#4f5f73;overflow-wrap:anywhere}.status{font-weight:800;text-transform:capitalize}.status.added{color:#28784f}.status.redeemed{color:#65758a}.status.addable{color:#0874cf}.status.unknown{color:#9a5b13}.table-row time{color:#8490a0;text-align:right}.dashboard-empty{padding:80px 24px;color:#718096;text-align:center}@media(max-width:800px){.topbar{padding:10px 14px}.updated{display:none}.layout{grid-template-columns:1fr}.sidebar{position:static;padding:12px 14px;border-right:0;border-bottom:1px solid #dce2e8}.filter-list{display:flex;flex-wrap:wrap;margin-bottom:10px}.filter{width:auto;border:1px solid #dce2e8}.privacy,.side-title{display:none}.content{padding:14px}.stats{grid-template-columns:repeat(2,minmax(0,1fr))}.table-head{display:none}.table-row{grid-template-columns:80px minmax(0,1fr) 82px}.terms{grid-column:2/4}.table-row time{display:none}.action span{display:none}}
     </style><header class="topbar"><span class="brand">${ICONS.dashboard}</span><div class="heading"><h1>Card Offers Dashboard</h1><p>Private local view by bank and card</p></div><span class="updated" data-dashboard-updated></span><button class="action" data-json>${ICONS.download}<span>JSON</span></button><button class="action" data-csv>${ICONS.download}<span>CSV</span></button></header><div class="layout"><aside class="sidebar"><h3 class="side-title">Banks</h3><div class="filter-list" data-dashboard-bank-filters></div><h3 class="side-title">Status</h3><div class="filter-list" data-dashboard-status-filters></div><p class="privacy">Offer data stays in this browser. Bank logins, cookies and full card numbers are not stored.</p></aside><section class="content"><div class="search-row"><label class="search-box">${ICONS.search}<input data-dashboard-search type="search" placeholder="Search merchant, bank or offer..."></label></div><div class="stats" data-dashboard-stats></div><div class="results" data-dashboard-results></div></section></div>`;
     targetDocument.body.appendChild(dashboard);
     targetDocument.title = "Card Offers Dashboard";
@@ -558,11 +848,11 @@ function normalizeAmexOffers(offers) {
     panel.id = ID;
     root = panel.attachShadow({ mode: "open" });
     root.innerHTML = `<style>
-      :host{position:fixed;z-index:2147483645;right:18px;bottom:18px;width:min(720px,calc(100vw - 36px));color:#142033;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color-scheme:light}:host(.minimized){width:auto}*{box-sizing:border-box;letter-spacing:0}svg{display:block;width:18px;height:18px}.launcher{display:none;align-items:center;gap:8px;padding:10px 13px;border:1px solid #0a2b63;border-radius:7px;background:#0a2b63;color:#fff;box-shadow:0 8px 24px #14203333;font:700 13px/1 inherit;cursor:pointer}:host(.minimized) .launcher{display:flex}:host(.minimized) .shell{display:none}.shell{display:flex;max-height:calc(100dvh - 36px);flex-direction:column;overflow:hidden;border:1px solid #d9e0e9;border-radius:8px;background:#f6f8fb;box-shadow:0 16px 38px #1420332e}.header{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid #e1e6ed;background:#fff;cursor:grab;touch-action:none}.mark{display:grid;width:42px;height:42px;place-items:center;flex:none;border-radius:7px;background:#0a2b63;color:#fff}.title{flex:1;min-width:0}.title strong{display:block;color:#071f52;font-size:18px;font-weight:800}.title span{display:block;color:#6d7889;font-size:11px}.icon{display:grid;width:32px;height:32px;place-items:center;padding:0;border:1px solid #d5dce6;border-radius:6px;background:#fff;color:#183b68;cursor:pointer}.bank-bar{display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid #e2e7ee;background:#eef4fa;color:#42566f;font-size:12px}.chip{padding:6px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#45556b;font:700 11px/1.2 inherit;cursor:pointer}.chip.active{border-color:#0a2b63;background:#0a2b63;color:#fff}.controls{padding:12px 16px;border-bottom:1px solid #e1e6ed}.search{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid #cfd8e4;border-radius:7px;background:#fff;color:#718096}.search input{width:100%;min-width:0;border:0;outline:0;background:transparent;color:#142033;font:15px/1.4 inherit}.toolbar,.filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.toolbar{margin-top:9px}.toolbar button{display:inline-flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#344861;font:700 11px/1.2 inherit;cursor:pointer}.toolbar .spacer{flex:1}.filters{margin-top:8px}.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}.stats div{padding:8px;border:1px solid #dce3ec;border-radius:6px;background:#fff}.stats b,.stats span{display:block}.stats b{color:#071f52;font-size:18px}.stats span{color:#7a8594;font-size:10px}.results{display:flex;min-height:80px;flex-direction:column;gap:8px;overflow:auto;padding:12px 16px}.offer{border:1px solid #dfe5ec;border-radius:7px;background:#fff}.offer-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px}.offer-title strong{display:block;color:#071f52;font-size:17px;font-weight:800;overflow-wrap:anywhere}.offer-title span{display:block;margin-top:2px;color:#697586;font-size:12px}.offer-title>b{min-width:28px;color:#53657a;text-align:right}.placements{border-top:1px solid #edf0f4}.placement{display:grid;grid-template-columns:76px minmax(110px,1fr) 76px 52px;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid #edf0f4;font-size:11px}.placement:first-child{border-top:0}.bank{padding-left:7px;border-left:3px solid var(--bank);font-weight:800}.card{display:block;min-width:0;color:#344861}.card strong,.card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card strong{font-size:11px}.card small{margin-top:2px;color:#778395;font-size:10px}.state{font-weight:800;text-transform:capitalize}.state.added{color:#28784f}.state.addable{color:#0874cf}.state.unknown{color:#9a5b13}.placement time{color:#8490a0;text-align:right}.empty{padding:32px 18px;color:#697586;text-align:center}.footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 16px;border-top:1px solid #e1e6ed;background:#fff;color:#6e7b8c;font-size:11px}@media(max-width:560px){:host{right:8px;bottom:8px;width:calc(100vw - 16px)}.shell{max-height:calc(100dvh - 16px)}.toolbar .spacer{display:none}.placement{grid-template-columns:70px minmax(0,1fr)}.state,.placement time{grid-column:auto}.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
-    </style><button class="launcher" data-restore>${ICONS.card}<span>Offer Hub</span></button><div class="shell"><header class="header" data-drag><span class="mark">${ICONS.card}</span><div class="title"><strong>Card Offers Hub</strong><span>Private local search by bank and card</span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${ICONS.minimize}</button></header><div class="bank-bar" data-current-bank></div><div class="controls"><label class="search">${ICONS.search}<input data-search type="search" placeholder="Search merchant, bank or offer..."></label><div class="toolbar"><button data-sync>${ICONS.refresh}Sync now</button><button data-dashboard>${ICONS.dashboard}Local</button><button data-server-dashboard>${ICONS.dashboard}VPN Dashboard</button><span class="spacer"></span><button data-json>${ICONS.download}JSON</button><button data-csv>${ICONS.download}CSV</button></div><div class="filters" data-bank-filters></div><div class="filters" data-status-filters></div><div class="stats" data-stats></div></div><section class="results" data-results></section><footer class="footer"><span data-notice></span><span>v0.1.9</span></footer></div>`;
+      :host{position:fixed;z-index:2147483645;right:18px;bottom:18px;width:min(720px,calc(100vw - 36px));color:#142033;font:14px/1.4 -apple-system,BlinkMacSystemFont,"Segoe UI",Arial,sans-serif;color-scheme:light}:host(.minimized){width:auto}*{box-sizing:border-box;letter-spacing:0}svg{display:block;width:18px;height:18px}.launcher{display:none;align-items:center;gap:8px;padding:10px 13px;border:1px solid #0a2b63;border-radius:7px;background:#0a2b63;color:#fff;box-shadow:0 8px 24px #14203333;font:700 13px/1 inherit;cursor:pointer}:host(.minimized) .launcher{display:flex}:host(.minimized) .shell{display:none}.shell{display:flex;max-height:calc(100dvh - 36px);flex-direction:column;overflow:hidden;border:1px solid #d9e0e9;border-radius:8px;background:#f6f8fb;box-shadow:0 16px 38px #1420332e}.header{display:flex;align-items:center;gap:12px;padding:14px 16px;border-bottom:1px solid #e1e6ed;background:#fff;cursor:grab;touch-action:none}.mark{display:grid;width:42px;height:42px;place-items:center;flex:none;border-radius:7px;background:#0a2b63;color:#fff}.title{flex:1;min-width:0}.title strong{display:block;color:#071f52;font-size:18px;font-weight:800}.title span{display:block;color:#6d7889;font-size:11px}.icon{display:grid;width:32px;height:32px;place-items:center;padding:0;border:1px solid #d5dce6;border-radius:6px;background:#fff;color:#183b68;cursor:pointer}.bank-bar{display:flex;align-items:center;padding:10px 16px;border-bottom:1px solid #e2e7ee;background:#eef4fa;color:#42566f;font-size:12px}.chip{padding:6px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#45556b;font:700 11px/1.2 inherit;cursor:pointer}.chip.active{border-color:#0a2b63;background:#0a2b63;color:#fff}.controls{padding:12px 16px;border-bottom:1px solid #e1e6ed}.search{display:flex;align-items:center;gap:9px;padding:9px 11px;border:1px solid #cfd8e4;border-radius:7px;background:#fff;color:#718096}.search input{width:100%;min-width:0;border:0;outline:0;background:transparent;color:#142033;font:15px/1.4 inherit}.toolbar,.filters{display:flex;align-items:center;gap:6px;flex-wrap:wrap}.toolbar{margin-top:9px}.toolbar button{display:inline-flex;align-items:center;gap:6px;padding:7px 9px;border:1px solid #d2dae5;border-radius:6px;background:#fff;color:#344861;font:700 11px/1.2 inherit;cursor:pointer}.toolbar .spacer{flex:1}.filters{margin-top:8px}.stats{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:6px;margin-top:10px}.stats div{padding:8px;border:1px solid #dce3ec;border-radius:6px;background:#fff}.stats b,.stats span{display:block}.stats b{color:#071f52;font-size:18px}.stats span{color:#7a8594;font-size:10px}.results{display:flex;min-height:80px;flex-direction:column;gap:8px;overflow:auto;padding:12px 16px}.offer{border:1px solid #dfe5ec;border-radius:7px;background:#fff}.offer-title{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;padding:12px}.offer-title strong{display:block;color:#071f52;font-size:17px;font-weight:800;overflow-wrap:anywhere}.offer-title span{display:block;margin-top:2px;color:#697586;font-size:12px}.offer-title>b{min-width:28px;color:#53657a;text-align:right}.placements{border-top:1px solid #edf0f4}.placement{display:grid;grid-template-columns:76px minmax(110px,1fr) 76px 52px;align-items:center;gap:7px;padding:8px 12px;border-top:1px solid #edf0f4;font-size:11px}.placement:first-child{border-top:0}.bank{padding-left:7px;border-left:3px solid var(--bank);font-weight:800}.card{display:block;min-width:0;color:#344861}.card strong,.card small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.card strong{font-size:11px}.card small{margin-top:2px;color:#778395;font-size:10px}.state{font-weight:800;text-transform:capitalize}.state.added{color:#28784f}.state.redeemed{color:#65758a}.state.addable{color:#0874cf}.state.unknown{color:#9a5b13}.placement time{color:#8490a0;text-align:right}.empty{padding:32px 18px;color:#697586;text-align:center}.footer{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 16px;border-top:1px solid #e1e6ed;background:#fff;color:#6e7b8c;font-size:11px}@media(max-width:560px){:host{right:8px;bottom:8px;width:calc(100vw - 16px)}.shell{max-height:calc(100dvh - 16px)}.toolbar .spacer{display:none}.placement{grid-template-columns:70px minmax(0,1fr)}.state,.placement time{grid-column:auto}.stats{grid-template-columns:repeat(3,minmax(0,1fr))}}
+    </style><button class="launcher" data-restore>${ICONS.card}<span>Offer Hub</span></button><div class="shell"><header class="header" data-drag><span class="mark">${ICONS.card}</span><div class="title"><strong>Card Offers Hub</strong><span>Private local search by bank and card</span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${ICONS.minimize}</button></header><div class="bank-bar" data-current-bank></div><div class="controls"><label class="search">${ICONS.search}<input data-search type="search" placeholder="Search merchant, bank or offer..."></label><div class="toolbar"><button data-sync>${ICONS.refresh}Sync now</button><button data-amex-stop hidden>Stop</button><button data-dashboard>${ICONS.dashboard}Local</button><button data-server-dashboard>${ICONS.dashboard}VPN Dashboard</button><span class="spacer"></span><button data-json>${ICONS.download}JSON</button><button data-csv>${ICONS.download}CSV</button></div><div class="filters" data-bank-filters></div><div class="filters" data-status-filters></div><div class="stats" data-stats></div></div><section class="results" data-results></section><footer class="footer"><span data-notice></span><span>v0.1.9</span></footer></div>`;
     setMinimized(minimized);
     root.querySelectorAll('[data-restore], [data-minimize]').forEach(button => { button.type = 'button'; });
-    root.querySelector('.footer > span:last-child').textContent = 'v0.1.13';
+    root.querySelector('.footer > span:last-child').textContent = 'v0.1.15';
     document.body.appendChild(panel);
     root.querySelector("[data-search]").addEventListener("input", event => { query = event.target.value; render(); });
     root.addEventListener("click", event => {
@@ -572,7 +862,8 @@ function normalizeAmexOffers(offers) {
       else if (button.dataset.minimize !== undefined) setMinimized(true);
       else if (button.dataset.bankFilter) { bankFilter = button.dataset.bankFilter; render(); }
       else if (button.dataset.statusFilter) { statusFilter = button.dataset.statusFilter; render(); }
-      else if (button.dataset.sync !== undefined) { notice = syncCurrentBank(true) ? notice : "No completed scan found on this page"; render(); }
+      else if (button.dataset.sync !== undefined) { if (currentBank() === "amex") void syncAmexWithRedeemed(); else { notice = syncCurrentBank(true) ? notice : "No completed scan found on this page"; render(); } }
+      else if (button.dataset.amexStop !== undefined) stopAmexSync();
       else if (button.dataset.dashboard !== undefined) openDashboard();
       else if (button.dataset.serverDashboard !== undefined) openServerDashboard();
       else if (button.dataset.json !== undefined) exportJson();
@@ -585,7 +876,7 @@ function normalizeAmexOffers(offers) {
     render();
   }
 
-  const api = { sanitizeSnapshot, mergeSnapshots, placements, filteredPlacements, groupedResults, syncCurrentBank, syncLocalServer, pairLocalServer, collectAmexPage, getData, render, renderDashboard, openDashboard, openServerDashboard, mount: () => { mount(); return panel; }, mountDashboard };
+  const api = { sanitizeSnapshot, mergeSnapshots, placements, filteredPlacements, groupedResults, syncCurrentBank, syncLocalServer, pairLocalServer, collectAmexPage, syncAmexWithRedeemed, stopAmexSync, getData, render, renderDashboard, openDashboard, openServerDashboard, mount: () => { mount(); return panel; }, mountDashboard };
   if (globalThis.__CARD_OFFERS_HUB_TEST__) { globalThis.__CARD_OFFERS_HUB_TEST__.api = api; return; }
   if (window.top !== window.self || document.getElementById(ID)) return;
   GM_registerMenuCommand?.("Open Card Offers Dashboard", openDashboard);

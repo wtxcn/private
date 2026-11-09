@@ -13,6 +13,94 @@ test('server preserves per-card scan ages instead of the latest bank timestamp',
   assert.deepEqual(data.snapshots.chase.cards.map(card => card.scannedAt), [100, 200]);
 });
 
+test('bank-synced redemption stays scoped to its card and campaign through stale sync and restart', async () => {
+  const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'card-offers-redeemed-'));
+  let running = await startServer({ host: '127.0.0.1', port: 0, dataDir });
+  let base = `http://127.0.0.1:${running.port}`;
+  const { writeToken, readToken } = await fetch(`${base}/api/pair`).then(response => response.json());
+  const campaign = 'amex|nordstrom|spend $200, get $50 back|2026-12-31';
+  const nextCampaign = 'amex|nordstrom|spend $200, get $50 back|2027-12-31';
+  const source = { updatedAt: 123, snapshots: { amex: { bank: 'amex', scannedAt: 123,
+    cards: [{ id: 'a', name: 'Card A' }, { id: 'b', name: 'Card B' }],
+    offers: [
+      { key: campaign, name: 'Nordstrom', description: 'Spend $200, get $50 back Expires 12/31/2026', cards: { a: 'redeemed', b: 'added' }, manualStatuses: { b: 'redeemed' } },
+      { key: nextCampaign, name: 'Nordstrom', description: 'Spend $200, get $50 back Expires 12/31/2027', cards: { a: 'added' } }
+    ]
+  } } };
+  const request = (route, body, token = writeToken) => fetch(`${base}${route}`, {
+    method: 'POST', headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body)
+  });
+  const read = () => fetch(`${base}/api/data`, { headers: { Authorization: `Bearer ${readToken}` } }).then(response => response.json());
+  const close = () => Promise.all(running.servers.map(server => new Promise(resolve => server.close(resolve))));
+  try {
+    assert.equal((await request('/api/sync', source, readToken)).status, 401);
+    assert.equal((await request('/api/sync', source, 'invalid-key')).status, 401);
+    assert.deepEqual((await read()).snapshots, {});
+    assert.equal((await request('/api/sync', source)).status, 200);
+    assert.equal((await fetch(`${base}/api/data`)).status, 401);
+    assert.equal((await fetch(`${base}/api/data`, { headers: { Authorization: `Bearer ${writeToken}` } })).status, 401);
+    assert.deepEqual((await read()).snapshots.amex.offers.find(item => item.key === campaign).cards, { a: 'redeemed', b: 'added' });
+    // An obsolete manual status file and endpoint cannot affect synced bank data.
+    fs.writeFileSync(path.join(dataDir, 'status-overrides.json'), JSON.stringify({ version: 1, overrides: [
+      { bank: 'amex', offerKey: campaign, cardId: 'b', status: 'redeemed' }
+    ] }));
+    assert.equal((await request('/api/status', { bank: 'amex', offerKey: campaign, cardId: 'b', status: 'redeemed' })).status, 404);
+    source.snapshots.amex.offers[0].cards.a = 'added';
+    assert.equal((await request('/api/sync', source)).status, 200);
+    await close();
+    running = await startServer({ host: '127.0.0.1', port: 0, dataDir });
+    base = `http://127.0.0.1:${running.port}`;
+    const data = await read();
+    const current = data.snapshots.amex.offers.find(item => item.key === campaign);
+    assert.deepEqual(current.cards, { a: 'redeemed', b: 'added' });
+    assert.equal(current.manualStatuses, undefined);
+    assert.equal(data.snapshots.amex.offers.find(item => item.key === nextCampaign).cards.a, 'added');
+    assert.equal(data.updatedAt, 123, 'preserving redemption must retain the source scan timestamp');
+  } finally {
+    await close();
+    fs.rmSync(dataDir, { recursive: true, force: true });
+  }
+});
+
+test('dashboard displays and filters bank-synced redeemed offers without write capability', async () => {
+  const html = fs.readFileSync(path.join(__dirname, '../local-offer-server/public/index.html'), 'utf8');
+  const app = fs.readFileSync(path.join(__dirname, '../local-offer-server/public/app.js'), 'utf8');
+  const dom = new JSDOM(html, { url: 'http://127.0.0.1:8787/?token=read-key', runScripts: 'outside-only' });
+  const data = { snapshots: { amex: { bank: 'amex', cards: [{ id: 'a', name: 'Card A' }, { id: 'b', name: 'Card B' }],
+    offers: [{ key: 'campaign', name: 'Nordstrom', description: '$200 / $50', cards: { a: 'redeemed', b: 'added' } }] } } };
+  const requests = [];
+  dom.window.fetch = async (url, options = {}) => {
+    requests.push({ url, method: options.method || 'GET' });
+    assert.equal(url, '/api/data');
+    assert.equal(options.method || 'GET', 'GET');
+    assert.equal(options.headers.Authorization, 'Bearer read-key');
+    return { ok: true, json: async () => structuredClone(data) };
+  };
+  const settle = () => new Promise(resolve => setImmediate(resolve));
+  try {
+    dom.window.eval(app);
+    await settle();
+    const document = dom.window.document;
+    assert.equal(document.querySelectorAll('.table-row').length, 2);
+    assert.equal(document.querySelector('.status.redeemed').textContent, 'redeemed');
+    assert.equal(document.querySelectorAll('.table-row button').length, 0);
+    const redeemedFilter = [...document.querySelectorAll('#status-filters button')].find(button => button.textContent === 'Redeemed');
+    redeemedFilter.click();
+    assert.equal(document.querySelectorAll('.table-row').length, 1);
+    assert.match(document.querySelector('.table-row').textContent, /Card A/);
+    assert.doesNotMatch(document.querySelector('.table-row').textContent, /Card B/);
+    const addedFilter = [...document.querySelectorAll('#status-filters button')].find(button => button.textContent === 'Added');
+    addedFilter.click();
+    assert.equal(document.querySelectorAll('.table-row').length, 1);
+    assert.match(document.querySelector('.table-row').textContent, /Card B/);
+    document.getElementById('refresh').click();
+    await settle();
+    assert.deepEqual(requests, [{ url: '/api/data', method: 'GET' }, { url: '/api/data', method: 'GET' }]);
+  } finally {
+    dom.window.close();
+  }
+});
+
 test('local Offer Server pairs only locally, sanitizes uploads and protects reads', async () => {
   const dataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'card-offers-server-'));
   const { servers, port } = await startServer({ host: '127.0.0.1', port: 0, dataDir });

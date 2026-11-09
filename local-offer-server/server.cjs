@@ -8,7 +8,7 @@ const crypto = require('node:crypto');
 const { normalizeAmexOffers } = require('./amex-offers.cjs');
 
 const BANKS = new Set(['chase', 'citi', 'usbank', 'amex']);
-const STATUSES = new Set(['addable', 'added', 'unknown']);
+const STATUSES = new Set(['addable', 'added', 'redeemed', 'unknown']);
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const CONTENT_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -99,6 +99,19 @@ function writeData(dataPath, value) {
   fs.chmodSync(dataPath, 0o600);
 }
 
+function preserveRedeemed(data, previous) {
+  for (const [bank, snapshot] of Object.entries(data.snapshots)) {
+    const priorOffers = new Map((previous.snapshots[bank]?.offers || []).map(offer => [offer.key, offer]));
+    for (const offer of snapshot.offers) {
+      const prior = priorOffers.get(offer.key);
+      for (const cardId of Object.keys(offer.cards)) {
+        if (prior?.cards[cardId] === 'redeemed') offer.cards[cardId] = 'redeemed';
+      }
+    }
+  }
+  return data;
+}
+
 function isLocalRequest(request) {
   const address = request.socket.remoteAddress;
   return address === '127.0.0.1' || address === '::1' || address === '::ffff:127.0.0.1' || address === request.socket.localAddress;
@@ -171,7 +184,7 @@ async function startServer(options = {}) {
       });
       request.on('end', () => {
         try {
-          const data = sanitizeData(JSON.parse(body));
+          const data = preserveRedeemed(sanitizeData(JSON.parse(body)), readData(state.dataPath));
           writeData(state.dataPath, data);
           sendJson(response, 200, { ok: true, updatedAt: data.updatedAt, banks: Object.keys(data.snapshots).length });
         } catch (_) {

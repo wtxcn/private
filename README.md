@@ -54,7 +54,10 @@ movable `Offer Hub` button on supported bank pages and on this repository page. 
 whether the currently logged-in bank account belongs to P1 or P2 before scanning. A
 completed Chase, Citi or U.S. Bank scan is then copied into the Hub automatically;
 confirmed enrollment changes are copied as well. On Amex Offers pages, the Hub records
-the currently visible addable offers for the selected card without clicking them.
+the bank's visible offer status for the selected card. **Sync now** also reads the
+native Redeemed list when that control is available; it never enrolls an offer. Use
+**Stop** to cancel that read-only traversal. Change the selected card to sync another
+card. The bank session must remain signed in.
 
 The Hub combines both people and every supported bank in one search. Results show the
 person, bank, masked card name, state and scan age. Filters cover P1/P2, bank and offer
@@ -131,6 +134,10 @@ npm run server:install
 The installer listens only on `127.0.0.1` and the detected `100.x` VPN address. It does not listen on the Mac's ordinary Wi-Fi/LAN address. Tampermonkey pairs through localhost and automatically syncs after an offer snapshot changes. Remote readers must be connected to the same VPN and provide the random read key from `~/.card-offers-hub/config.json`.
 
 The server validates and rebuilds every upload. It retains only supported bank names, hashed card IDs, safe card labels, offer text, status and scan time. It discards cookies, login details, full card numbers, selections, images and logs.
+
+Dashboard statuses come from bank scans. Redeemed is retained for the same card and
+campaign when an older Added snapshot is uploaded; another card or a later campaign
+does not inherit it. The dashboard has no manual status override or status-edit API.
 
 ## Why this script exists
 

@@ -119,7 +119,7 @@
     const groups = grouped(items);
     const cards = new Set(all.map(item => `${item.bank}|${item.card}`)).size;
     elements['bank-filters'].replaceChildren(filterButton('All banks', 'all', state.bank, 'bank', '#64748b'), ...Object.entries(BANKS).map(([key, bank]) => filterButton(bank.name, key, state.bank, 'bank', bank.color)));
-    elements['status-filters'].replaceChildren(...[['Any status', 'all'], ['Addable', 'addable'], ['Added', 'added'], ['Unverified', 'unknown']].map(([label, value]) => filterButton(label, value, state.status, 'status')));
+    elements['status-filters'].replaceChildren(...[['Any status', 'all'], ['Addable', 'addable'], ['Added', 'added'], ['Redeemed', 'redeemed'], ['Unverified', 'unknown']].map(([label, value]) => filterButton(label, value, state.status, 'status')));
     elements.stats.replaceChildren(...[
       [Object.keys(state.data?.snapshots || {}).length, 'Banks'],
       [cards, 'Cards'],
