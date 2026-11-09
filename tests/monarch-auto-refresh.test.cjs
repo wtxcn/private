@@ -136,7 +136,7 @@ function environment(iso, options = {}) {
   const prefix = 'data-monarch-auto-refresh-';
   const transaction = environment('2026-11-08T19:59:00Z', { path: '/transactions' });
   await flush();
-  check(transaction.state.attrs[prefix + 'version'], '1.0.7', 'diagnostics exposes current version');
+  check(transaction.state.attrs[prefix + 'version'], '1.0.8', 'diagnostics exposes current version');
   check(transaction.state.attrs[prefix + 'page'], 'other', 'non-account route is observable');
   check(transaction.state.attrs[prefix + 'page-status'].includes('自动进入 Accounts'), true, 'non-account explanation is explicit');
   check(transaction.state.attrs[prefix + 'status'].includes('等待下次计划'), true, 'outside-window status explains waiting');
@@ -231,6 +231,10 @@ function environment(iso, options = {}) {
   await completed.at('2026-11-08T11:01:00Z');
   check(JSON.parse(completed.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
     'confirmed', 'native completion notice confirms sync');
+  check(JSON.parse(completed.shared.storage.get('monarch-auto-refresh:history:v1'))[0].at,
+    Date.parse('2026-11-08T11:00:00Z'), 'confirmed entry keeps original click time');
+  check(JSON.parse(completed.shared.storage.get('monarch-auto-refresh:history:v1'))[0].resultAt,
+    Date.parse('2026-11-08T11:01:00Z'), 'confirmed entry stores result time separately');
   check(completed.state.queries.some(query => query.includes('RefreshProgressToast__Root')),
     true, 'completion monitor targets Monarch actual toast component');
   check(completed.state.attrs[prefix + 'outcome'], 'confirmed', 'confirmed result is exposed for diagnostics');
@@ -278,5 +282,22 @@ function environment(iso, options = {}) {
   const reopened = environment('2026-11-08T10:01:00Z', { shared: movable.shared });
   await flush();
   check(reopened.state.widgets[0].style.left, '350px', 'icon position survives reload');
+
+  const oldClickAt = Date.parse('2026-11-08T11:00:00Z');
+  const oldResultAt = Date.parse('2026-11-08T11:11:00Z');
+  const oldShared = { storage: new Map([
+    ['monarch-auto-refresh:last-attempt:v1', JSON.stringify({ slot: 'old-slot', at: oldClickAt,
+      status: 'clicked', result: 'unconfirmed' })],
+    ['monarch-auto-refresh:history:v1', JSON.stringify([{ slot: 'old-slot', at: oldResultAt,
+      outcome: 'unconfirmed' }, { slot: 'earlier', at: oldClickAt - 10_800_000, outcome: 'clicked' }])],
+  ]), locked: false };
+  const oldDisplay = environment('2026-11-08T11:20:00Z', { shared: oldShared });
+  await flush();
+  const repaired = JSON.parse(oldShared.storage.get('monarch-auto-refresh:history:v1'));
+  check(repaired[0].at, oldClickAt, 'old result log is restored to original click time');
+  check(repaired[0].resultAt, oldResultAt, 'old result time remains available');
+  oldDisplay.state.widgets[0].click();
+  check(oldDisplay.state.widgets[0].textContent.includes('旧记录：已点击，结果未记录'), true,
+    'stale old click no longer claims to be waiting');
   console.log(`PASS: ${assertions} checks; no real browser clicks or network requests.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
