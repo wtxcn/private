@@ -25,7 +25,7 @@ function button(options = {}) {
 function environment(iso, options = {}) {
   const state = { now: Date.parse(iso), buttons: options.buttons || [button()], modals: [], notices: [],
     path: options.path || '/accounts', online: true, events: {}, logs: [], menu: null, tick: null,
-    attrs: {}, widgets: [], alerts: [], navigations: [], activeElement: null };
+    attrs: {}, widgets: [], alerts: [], navigations: [], activeElement: null, queries: [] };
   const shared = options.shared || { storage: new Map(), locked: false };
   class FakeDate extends Date {
     constructor(...args) { super(...(args.length ? args : [state.now])); }
@@ -58,8 +58,11 @@ function environment(iso, options = {}) {
       },
       body: { appendChild(element) { element.isConnected = true; state.widgets.push(element); } },
       createElement: () => button({ name: '' }),
-      querySelectorAll: selector => selector.startsWith('button') ? [...state.buttons, ...state.widgets]
-        : selector.startsWith('[role="status"]') ? state.notices : state.modals,
+      querySelectorAll: selector => {
+        state.queries.push(selector);
+        return selector.startsWith('button') ? [...state.buttons, ...state.widgets]
+          : selector.includes('RefreshProgressToast__Root') ? state.notices : state.modals;
+      },
       addEventListener: (name, fn) => { state.events[name] = fn; },
     },
     window: { innerWidth: 1200, innerHeight: 800, addEventListener: (name, fn) => { state.events[name] = fn; } },
@@ -133,7 +136,7 @@ function environment(iso, options = {}) {
   const prefix = 'data-monarch-auto-refresh-';
   const transaction = environment('2026-11-08T19:59:00Z', { path: '/transactions' });
   await flush();
-  check(transaction.state.attrs[prefix + 'version'], '1.0.6', 'diagnostics exposes current version');
+  check(transaction.state.attrs[prefix + 'version'], '1.0.7', 'diagnostics exposes current version');
   check(transaction.state.attrs[prefix + 'page'], 'other', 'non-account route is observable');
   check(transaction.state.attrs[prefix + 'page-status'].includes('自动进入 Accounts'), true, 'non-account explanation is explicit');
   check(transaction.state.attrs[prefix + 'status'].includes('等待下次计划'), true, 'outside-window status explains waiting');
@@ -228,6 +231,8 @@ function environment(iso, options = {}) {
   await completed.at('2026-11-08T11:01:00Z');
   check(JSON.parse(completed.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
     'confirmed', 'native completion notice confirms sync');
+  check(completed.state.queries.some(query => query.includes('RefreshProgressToast__Root')),
+    true, 'completion monitor targets Monarch actual toast component');
   check(completed.state.attrs[prefix + 'outcome'], 'confirmed', 'confirmed result is exposed for diagnostics');
   check(completed.clicks(), 1, 'completion observation does not repeat refresh');
 
