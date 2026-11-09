@@ -66,7 +66,7 @@ test('Hub starts minimized and restores repeatedly without capturing launcher cl
     api.render();
     assert.equal(panel.classList.contains('minimized'), true);
   }
-  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.18');
+  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.19');
   dom.window.close();
 });
 
@@ -524,8 +524,8 @@ test('Amex activity rows on the redeemed page are captured only for the selected
   const { dom, w, api } = setup('https://global.americanexpress.com/offers/redeemed?opaqueAccountId=test', { settle: 0 });
   w.document.body.innerHTML = `<div role="combobox" aria-label="Open to manage your other accounts">
     <div data-testid="simple_switcher_selected_option_display" aria-label="Platinum Card ending in 1234."></div></div>
-    <button data-testid="redeemedOffer-first"><span>Oct 25, 2026</span><span><span>Nordstrom</span><span>Card ending in ••••-1234</span></span><span>$50.00</span></button>
-    <button data-testid="redeemedOffer-other"><span>Oct 20, 2026</span><span><span>Kroger</span><span>Card ending in ••••-8765</span></span><span>$15.00</span></button>`;
+    <button data-testid="redeemedOffer-first"><span>Oct 25, 2026</span><span><span>Nordstrom</span><span>Card ending in ••••-1234</span></span><span></span><span>$50.00</span></button>
+    <button data-testid="redeemedOffer-other"><span>Oct 20, 2026</span><span><span>Kroger</span><span>Card ending in ••••-8765</span></span><span></span><span>$15.00</span></button>`;
   assert.equal(api.collectAmexPage(), true);
   api.syncCurrentBank(true);
   const redeemed = api.placements().filter(item => item.status === 'redeemed');
@@ -533,6 +533,27 @@ test('Amex activity rows on the redeemed page are captured only for the selected
   assert.equal(redeemed[0].name, 'Nordstrom');
   assert.match(redeemed[0].description, /\$50\.00/);
   assert.match(redeemed[0].card, /1234/);
+  dom.window.close();
+});
+
+test('Amex Sync now accepts the dedicated activity page with matching redemption rows', async () => {
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers/redeemed?opaqueAccountId=test', { poll: 5, settle: 0, timeout: 200 });
+  w.document.body.innerHTML = `<div role="combobox" aria-label="Open to manage your other accounts">
+    <div data-testid="simple_switcher_selected_option_display" aria-label="Test Card ending in 1234."></div></div>
+    <button data-testid="redeemedOffer-first"><span>Oct 25, 2026</span>
+      <span><span>Merchant</span><span>Card ending in ••••-1234</span></span><span></span><span>$5.00</span></button>`;
+  assert.equal(await api.syncAmexWithRedeemed(), true);
+  assert.equal(api.placements().filter(item => item.status === 'redeemed').length, 1);
+  dom.window.close();
+});
+
+test('Amex Sync now recognizes the official empty activity message', async () => {
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers/redeemed?opaqueAccountId=test', { poll: 5, settle: 0, timeout: 200 });
+  w.document.body.innerHTML = `<div role="combobox" aria-label="Open to manage your other accounts">
+    <div data-testid="simple_switcher_selected_option_display" aria-label="Test Card ending in 1234."></div></div>
+    <h2>You haven't redeemed any offers in the last 24 months. Add and redeem offers to earn rewards on qualifying purchases.</h2>`;
+  assert.equal(await api.syncAmexWithRedeemed(), true);
+  assert.equal(api.placements().length, 0);
   dom.window.close();
 });
 
@@ -568,7 +589,7 @@ test('Amex ignores hidden redeemed badges and unrelated selected navigation', ()
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.18/);
+  assert.match(source, /@version\s+0\.1\.19/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);

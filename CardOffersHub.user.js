@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Card Offers Hub
 // @namespace    https://github.com/wtxcn/private
-// @version      0.1.18
+// @version      0.1.19
 // @description  Combine card-offer snapshots from supported banks into one private local search hub.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -420,6 +420,12 @@ function normalizeAmexOffers(offers) {
     return Array.from(document.querySelectorAll('button[data-testid^="redeemedOffer-"]')).filter(amexElementVisible);
   }
 
+  function amexRedeemedEmpty() {
+    if (!/^\/offers\/redeemed\/?$/i.test(location.pathname)) return false;
+    return Array.from(document.querySelectorAll('p, h2, h3, [role="status"], [data-testid]')).some(element =>
+      amexElementVisible(element) && /^you haven.t redeemed any offers in the last 24 months\b/i.test((element.textContent || '').trim()));
+  }
+
   function amexView(allowPath = true) {
     for (const [view, id] of [['addable', 'ELIGIBLE'], ['added', 'ENROLLED'], ['redeemed', 'REDEEMED']]) {
       const control = document.getElementById(id);
@@ -447,7 +453,7 @@ function normalizeAmexOffers(offers) {
     if (tiles.length) return JSON.stringify(tiles.map(amexText));
     const empty = Array.from(document.querySelectorAll('p, h2, h3, [role="status"], [data-testid]')).find(element => amexElementVisible(element)
       && /^(?:you (?:have|currently have) no redeemed offers|no redeemed offers|you haven't redeemed any offers(?: yet)?)[.!]?$/i.test((element.textContent || '').trim()));
-    return empty ? `empty:${empty.textContent.trim()}` : '';
+    return empty ? `empty:${empty.textContent.trim()}` : amexRedeemedEmpty() ? 'empty:redeemed activity' : '';
   }
 
   function amexLoading() {
@@ -553,7 +559,8 @@ function normalizeAmexOffers(offers) {
         syncCurrentBank(true, { run, card, view: initialView });
       }
       const control = amexRedeemedControl();
-      const alreadyRedeemed = amexView(false) === 'redeemed';
+      const alreadyRedeemed = amexView(false) === 'redeemed'
+        || (/^\/offers\/redeemed\/?$/i.test(location.pathname) && (amexRedemptionRows().length > 0 || amexRedeemedEmpty()));
       if (!alreadyRedeemed && !control) throw new Error('Visible offers synced. No native Redeemed control was found on this page.');
       notice = `Syncing redeemed offers: ${card.name}`;
       render();
@@ -596,7 +603,7 @@ function normalizeAmexOffers(offers) {
         const date = cells[0] || '';
         const merchant = row.children[1]?.querySelector('span')?.textContent?.trim() || '';
         const tail = (cells[1] || '').match(/Card ending in\s*[•·*\s-]*(\d{4,5})/i)?.[1];
-        const amount = (cells[2] || '').match(/\$[\d,]+(?:\.\d{2})?/)?.[0];
+        const amount = cells.slice(2).join(' ').match(/\$[\d,]+(?:\.\d{2})?/)?.[0];
         if (!merchant || !tail || tail !== card.tail || !amount || !/^[A-Za-z]{3} \d{1,2}, \d{4}$/.test(date)) return null;
         return { key: normalize(`amex activity|${card.id}|${merchant}|${date}|${amount}`), name: merchant,
           description: `Statement credit ${amount} earned ${date}`, cards: { [card.id]: 'redeemed' } };
@@ -854,7 +861,7 @@ function normalizeAmexOffers(offers) {
     </style><button class="launcher" data-restore>${ICONS.card}<span>Offer Hub</span></button><div class="shell"><header class="header" data-drag><span class="mark">${ICONS.card}</span><div class="title"><strong>Card Offers Hub</strong><span>Private local search by bank and card</span></div><button class="icon" data-minimize title="Minimize" aria-label="Minimize">${ICONS.minimize}</button></header><div class="bank-bar" data-current-bank></div><div class="controls"><label class="search">${ICONS.search}<input data-search type="search" placeholder="Search merchant, bank or offer..."></label><div class="toolbar"><button data-sync>${ICONS.refresh}Sync now</button><button data-amex-stop hidden>Stop</button><button data-dashboard>${ICONS.dashboard}Local</button><button data-server-dashboard>${ICONS.dashboard}VPN Dashboard</button><span class="spacer"></span><button data-json>${ICONS.download}JSON</button><button data-csv>${ICONS.download}CSV</button></div><div class="filters" data-bank-filters></div><div class="filters" data-status-filters></div><div class="stats" data-stats></div></div><section class="results" data-results></section><footer class="footer"><span data-notice></span><span>v0.1.9</span></footer></div>`;
     setMinimized(minimized);
     root.querySelectorAll('[data-restore], [data-minimize]').forEach(button => { button.type = 'button'; });
-    root.querySelector('.footer > span:last-child').textContent = 'v0.1.18';
+    root.querySelector('.footer > span:last-child').textContent = 'v0.1.19';
     document.body.appendChild(panel);
     root.querySelector("[data-search]").addEventListener("input", event => { query = event.target.value; render(); });
     root.addEventListener("click", event => {
