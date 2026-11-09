@@ -66,7 +66,7 @@ test('Hub starts minimized and restores repeatedly without capturing launcher cl
     api.render();
     assert.equal(panel.classList.contains('minimized'), true);
   }
-  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.15');
+  assert.equal(root.querySelector('.footer > span:last-child').textContent, 'v0.1.18');
   dom.window.close();
 });
 
