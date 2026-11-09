@@ -537,7 +537,7 @@ test('Amex activity rows on the redeemed page are captured only for the selected
 });
 
 test('Amex Sync now follows View Activity and reads redemption rows', async () => {
-  const { dom, w, api } = setup('https://global.americanexpress.com/offers?opaqueAccountId=test', { poll: 5, settle: 0, timeout: 200 });
+  const { dom, w, api } = setup('https://global.americanexpress.com/offers', { poll: 5, settle: 0, timeout: 200 });
   w.document.body.innerHTML = `<div role="combobox" aria-label="Open to manage your other accounts">
     <div data-testid="simple_switcher_selected_option_display" aria-label="Platinum Card ending in 1234."></div></div>
     <a id="savings-view-more-header" href="/offers/redeemed?opaqueAccountId=test">View Activity</a>`;
@@ -568,7 +568,7 @@ test('Amex ignores hidden redeemed badges and unrelated selected navigation', ()
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.16/);
+  assert.match(source, /@version\s+0\.1\.17/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);

@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Card Offers Hub
 // @namespace    https://github.com/wtxcn/private
-// @version      0.1.16
+// @version      0.1.17
 // @description  Combine card-offer snapshots from supported banks into one private local search hub.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -483,8 +483,10 @@ function normalizeAmexOffers(offers) {
     const activityLink = document.querySelector('a#savings-view-more-header[href]');
     if (activityLink && amexElementVisible(activityLink)) {
       const url = new URL(activityLink.href, location.href);
+      const currentAccount = new URL(location.href).searchParams.get('opaqueAccountId');
+      const targetAccount = url.searchParams.get('opaqueAccountId');
       if (url.origin === location.origin && /^\/offers\/redeemed\/?$/i.test(url.pathname)
-        && url.searchParams.get('opaqueAccountId') === new URL(location.href).searchParams.get('opaqueAccountId')) return activityLink;
+        && !(currentAccount && targetAccount && currentAccount !== targetAccount)) return activityLink;
     }
     const explicit = document.getElementById('REDEEMED');
     const label = explicit?.id && Array.from(document.querySelectorAll('label')).find(candidate => candidate.htmlFor === explicit.id && amexElementVisible(candidate));
