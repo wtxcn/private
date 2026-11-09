@@ -2,13 +2,13 @@
 
 [安装 MonarchAutoRefresher.user.js](https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js)
 
-Tampermonkey 用户脚本，v1.0.3。使用 Monarch 页面现有的 `Refresh all` 按钮，复用当前登录状态。
+Tampermonkey 用户脚本，v1.0.4。使用 Monarch 页面现有的 `Refresh all` 按钮，复用当前登录状态。
 
-## 安装与保留账户列表标签
+## 安装
 
 1. 在 Chrome 中安装并启用 Tampermonkey。
 2. 打开上方安装链接并安装脚本；也可以新建用户脚本，将本目录的 `MonarchAutoRefresher.user.js` 全文粘贴到编辑器，保存并启用。更新已有脚本后，重新加载 Monarch 标签。
-3. **单独保留一个已登录的 [Accounts 账户列表标签](https://app.monarch.com/accounts?chartType=performance&timeframe=month)。查看 Transactions、预算等页面时，请另开标签。** 同一个标签切到其他页面后，本页不会执行自动刷新；脚本不会自动导航或另开窗口。
+3. 保留一个已登录的 Monarch 标签即可。如果当前在 Transactions、预算等页面，计划时间到时脚本会进入 [Accounts](https://app.monarch.com/accounts?chartType=performance&timeframe=month) 再刷新。若已有可执行的 Accounts 标签，该标签会负责刷新，其他页面不会切换。
 4. 查看页面右下角的脚本状态按钮。点击按钮，或在 Tampermonkey 菜单中选择“查看计划 / 检查按钮（不执行刷新）”，可查看诊断；正常时本页状态应显示此账户列表页可自动刷新，并显示原生 `Refresh all` 按钮已识别且可点击。
 
 如果未出现状态按钮或脚本菜单，检查 Tampermonkey 是否启用，并按扩展提示允许用户脚本运行，再重新加载 Monarch。
@@ -18,10 +18,10 @@ Tampermonkey 用户脚本，v1.0.3。使用 Monarch 页面现有的 `Refresh all
 - 时区固定为 **America/Chicago**，随夏令时自动调整。
 - 每天 **05:00、08:00、11:00、14:00、17:00、20:00、23:00**；不包含凌晨02:00，次日05:00重新开始。
 - 每15秒检查一次，只在每个计划时点后的前10分钟内尝试；**错过不补刷**。
-- 电脑需保持唤醒，浏览器和独立的 Accounts 标签需保持打开，Monarch需保持登录。后台标签可能被节流，标签冻结、丢弃或Mac睡眠时无法保证执行。
+- 电脑需保持唤醒，浏览器和至少一个 Monarch 标签需保持打开，Monarch需保持登录。后台标签可能被节流，标签冻结、丢弃或Mac睡眠时无法保证执行。
 - 电脑锁屏不需要鼠标点击，但浏览器和标签仍需保持运行；脚本不负责唤醒电脑。
 - 如 Chrome 的“内存节省程序”会休眠此标签，可将 `app.monarch.com` 加入“始终保持活跃的网站”。
-- 离开 `/accounts` 后仍会更新诊断状态，但不会点击刷新；返回后按原计划检查。
+- 非 Accounts 页面在计划窗口内自动进入 Accounts；如正在编辑或有弹窗，会暂缓切页以避免丢失内容。
 
 ## 状态与去重
 
@@ -31,11 +31,11 @@ Tampermonkey 用户脚本，v1.0.3。使用 Monarch 页面现有的 `Refresh all
 
 最近脚本尝试存放在站点本地存储中，只包含计划时点、尝试时间和点击状态。`attempted` 表示已记录点击尝试，`clicked` 表示已调用页面按钮；**它们都不表示 Monarch 或银行已成功同步**，同步结果以 Monarch 页面为准。用户手动点击刷新不会写入这条记录，脚本也不绕过 Monarch 或银行的限制。
 
-同一浏览器配置中的多个 Monarch 标签通过 Web Locks 和站点本地记录去重；不同浏览器、浏览器配置、无痕窗口及其他电脑之间不共享。清除站点存储会清除去重记录。点击前即记录尝试，服务器报错或限流时不会反复重试。
+同一浏览器配置中的多个 Monarch 标签通过 Web Locks 和站点本地记录协调；已有可用 Accounts 标签时优先由它执行，否则仅一个标签进入 Accounts。不同浏览器、浏览器配置、无痕窗口及其他电脑之间不共享。清除站点存储会清除去重记录。点击前即记录尝试，服务器报错或限流时不会反复重试。
 
 ## 隐私
 
-脚本不读取或保存密码、令牌、余额、账户号码或交易，不调用银行或 Monarch 私有 API。站点存储只保存计划时点、尝试时间和点击状态；不会上传到 GitHub。没有远程依赖。Tampermonkey 可从此仓库下载代码更新。
+脚本不读取或保存密码、令牌、余额、账户号码或交易，不调用银行或 Monarch 私有 API。站点存储保存计划时点、尝试时间、点击状态，以及短期跨标签协调时间戳；不会上传到 GitHub。没有远程依赖。Tampermonkey 可从此仓库下载代码更新。
 
 ## 停用与修改
 
@@ -49,14 +49,14 @@ const HOURS = [2, 5, 8, 11, 14, 17, 20, 23];
 
 ## 本地验证
 
-已在 Monarch 账户列表页面核实原生按钮，并兼容按钮中的图标字体字符。合成测试不包含真实账户数据，覆盖冬夏时区、固定时点、宽限期、跨标签与重载去重、缺失及禁用按钮、弹窗、离线、存储异常和诊断状态。
+已在 Monarch 账户列表页面核实原生按钮，并兼容按钮中的图标字体字符。合成测试不包含真实账户数据，覆盖冬夏时区、固定时点、宽限期、其他页面进入 Accounts、跨标签与重载去重、编辑与弹窗、离线、存储异常和诊断状态。
 
 ```sh
 node --check MonarchAutoRefresher.user.js
 node tests/monarch-auto-refresh.test.cjs
 ```
 
-本地模拟检查不能证明浏览器实际后台定时触发或银行同步成功；安装后的真实定时执行仍需在浏览器中确认。页面根元素的 `data-monarch-auto-refresh-version` 和 `data-monarch-auto-refresh-status` 属性仅包含版本及通用运行状态，可用于诊断是否已加载。v1.0.3 还公开以下诊断属性，不包含账户信息：
+本地模拟检查不能证明浏览器实际后台定时触发或银行同步成功；安装后的真实定时执行仍需在浏览器中确认。页面根元素的 `data-monarch-auto-refresh-version` 和 `data-monarch-auto-refresh-status` 属性仅包含版本及通用运行状态，可用于诊断是否已加载。v1.0.4 还公开以下诊断属性，不包含账户信息：
 
 - `data-monarch-auto-refresh-last-check`：最近一次脚本检查时间。
 - `data-monarch-auto-refresh-page`：当前页面类型。
