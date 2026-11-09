@@ -255,6 +255,12 @@ test('US Bank: Redeemed waits for a row or a confirmed empty state', () => {
   assert.equal(api.adapter.redeemedListSettled(), true);
   dom.window.close();
 });
+test('US Bank: current empty Redeemed page settles on its six-month explanation', () => {
+  const html = '<button role="tab" aria-selected="true">Redeemed</button><h3>Redeemed deals</h3><p>Your pending and completed deals are shown for up to 6 months. It could take 1-2 billing cycles for credits to appear.</p>';
+  const { dom, api } = setup('usbank', html);
+  assert.equal(api.adapter.redeemedListSettled(), true);
+  dom.window.close();
+});
 test('US Bank: card labels and offer details expose the real card ending', async () => {
   const html = '<button aria-label="Select U.S. Bank Cash+ Visa Signature Card ending in 4321">Account</button><button aria-label="Offer from Merchant A 10% cash back"><span>10% cash back</span></button>';
   const { dom, api, w } = setup('usbank', html);
@@ -306,7 +312,7 @@ test('packaged scripts have independent identities, no remote library, no confir
     assert.match(code, /pointermove/);
     assert.match(code, /cardOffersHubSource\.\$\{config\.adapter\}\.v1/);
   }
-  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.10/);
+  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.11/);
 });
 
 test('an omitted card-offer record on rescan cannot make a partial offer fully added', () => {
