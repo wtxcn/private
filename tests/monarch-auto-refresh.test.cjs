@@ -133,7 +133,7 @@ function environment(iso, options = {}) {
   const prefix = 'data-monarch-auto-refresh-';
   const transaction = environment('2026-11-08T19:59:00Z', { path: '/transactions' });
   await flush();
-  check(transaction.state.attrs[prefix + 'version'], '1.0.5', 'diagnostics exposes current version');
+  check(transaction.state.attrs[prefix + 'version'], '1.0.6', 'diagnostics exposes current version');
   check(transaction.state.attrs[prefix + 'page'], 'other', 'non-account route is observable');
   check(transaction.state.attrs[prefix + 'page-status'].includes('自动进入 Accounts'), true, 'non-account explanation is explicit');
   check(transaction.state.attrs[prefix + 'status'].includes('等待下次计划'), true, 'outside-window status explains waiting');
@@ -236,6 +236,16 @@ function environment(iso, options = {}) {
   await noNotice.at('2026-11-08T11:10:00Z');
   check(JSON.parse(noNotice.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
     'unconfirmed', 'missing completion notice is not reported as success');
+
+  const reloadPendingShared = { storage: new Map(), locked: false };
+  const beforeReload = environment('2026-11-08T11:00:00Z', { shared: reloadPendingShared });
+  await flush();
+  const afterReload = environment('2026-11-08T11:05:00Z', { shared: reloadPendingShared, path: '/transactions' });
+  await flush();
+  await afterReload.at('2026-11-08T11:10:00Z');
+  check(JSON.parse(reloadPendingShared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'unconfirmed', 'pending result expires after page reload');
+  check(beforeReload.clicks(), 1, 'reloading cannot repeat previous click');
 
   const staleNotice = environment('2026-11-08T10:59:00Z');
   await flush();
