@@ -2,7 +2,7 @@
 
 [安装 MonarchAutoRefresher.user.js](https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js)
 
-Tampermonkey 用户脚本，v1.0.9。使用 Monarch 页面现有的 `Refresh all` 按钮，复用当前登录状态。
+Tampermonkey 用户脚本，v1.0.10。使用 Monarch 页面现有的 `Refresh all` 按钮，复用当前登录状态。
 
 ## 安装
 
@@ -25,13 +25,13 @@ Tampermonkey 用户脚本，v1.0.9。使用 Monarch 页面现有的 `Refresh all
 
 ## 状态与去重
 
-右下角默认只有一个小 ↻ 图标；点击后显示本页状态、最近脚本尝试、下次计划时间和最近 10 条日志。展开或拖动图标均不执行刷新。
+右下角默认只有一个小 ↻ 图标；点击后显示本页状态、最近脚本尝试、下次计划时间和最近 10 条日志。同步期间如果 Monarch 提供进度数值，展开面板还会显示当前百分比。展开或拖动图标均不执行刷新。
 
 脚本仅定位名称精确为 `Refresh all` 的唯一可见且可用按钮；按钮未就绪、页面有模态弹窗或网络离线时，会在当次10分钟窗口内继续检查。每个计划时点最多尝试一次，脚本尝试之间至少间隔170分钟。
 
 最近脚本尝试存放在站点本地存储中，只包含计划时点、尝试时间和点击状态。`attempted` 表示已记录点击尝试，`clicked` 表示已调用页面按钮；**它们都不表示 Monarch 或银行已成功同步**，同步结果以 Monarch 页面为准。用户手动点击刷新不会写入这条记录，脚本也不绕过 Monarch 或银行的限制。
 
-日志状态“Monarch 显示同步完成”表示脚本在本次点击后观察到了右下角的 `Sync complete / All accounts are up to date` 提示；如果该提示提供可读取的进度值，还要求进度到 100%。它不保证每家银行都产生了新数据。若 10 分钟内未观察到完成提示，显示“已点击，未确认完成”，不推断刷新失败。日志左侧始终显示点击时间，不会用结果判定时间覆盖；旧版没有结果记录的点击会显示“结果未记录”。
+日志状态“Monarch 显示同步完成”表示脚本在本次点击后观察到了右下角的 `Sync complete / All accounts are up to date` 提示；如果该提示提供可读取的进度值，还要求进度到 100%。同步花费 1–2 分钟时，脚本会继续等待并检查；最多等待 10 分钟。它不保证每家银行都产生了新数据。若 10 分钟内未观察到完成提示，显示“已点击，未确认完成”，不推断刷新失败。日志左侧始终显示点击时间，不会用结果判定时间覆盖；旧版没有结果记录的点击会显示“结果未记录”。
 
 同一浏览器配置中的多个 Monarch 标签通过 Web Locks 和站点本地记录协调；已有可用 Accounts 标签时优先由它执行，否则仅一个标签进入 Accounts。不同浏览器、浏览器配置、无痕窗口及其他电脑之间不共享。清除站点存储会清除去重记录。点击前即记录尝试，服务器报错或限流时不会反复重试。
 
@@ -58,7 +58,7 @@ node --check MonarchAutoRefresher.user.js
 node tests/monarch-auto-refresh.test.cjs
 ```
 
-本地模拟检查不能证明浏览器实际后台定时触发或银行同步成功；安装后的真实定时执行仍需在浏览器中确认。页面根元素的 `data-monarch-auto-refresh-version` 和 `data-monarch-auto-refresh-status` 属性仅包含版本及通用运行状态，可用于诊断是否已加载。v1.0.9 还公开以下诊断属性，不包含账户信息：
+本地模拟检查不能证明浏览器实际后台定时触发或银行同步成功；安装后的真实定时执行仍需在浏览器中确认。页面根元素的 `data-monarch-auto-refresh-version` 和 `data-monarch-auto-refresh-status` 属性仅包含版本及通用运行状态，可用于诊断是否已加载。v1.0.10 还公开以下诊断属性，不包含账户信息：
 
 - `data-monarch-auto-refresh-last-check`：最近一次脚本检查时间。
 - `data-monarch-auto-refresh-page`：当前页面类型。
@@ -66,3 +66,4 @@ node tests/monarch-auto-refresh.test.cjs
 - `data-monarch-auto-refresh-last-attempt`：最近脚本尝试记录。
 - `data-monarch-auto-refresh-next-schedule`：下次计划时间。
 - `data-monarch-auto-refresh-outcome`：最近一次脚本刷新状态（clicked / confirmed / unconfirmed）。
+- `data-monarch-auto-refresh-progress`：当前页面同步提示可读取的进度百分比；没有进度数值时为空。
