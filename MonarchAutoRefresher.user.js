@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monarch 定时 Refresh all
 // @namespace    local.monarch.auto-refresh
-// @version      1.0.9
+// @version      1.0.10
 // @description  每天 05:00 起每 3 小时进入 Accounts 并点击 Refresh all（America/Chicago）。
 // @homepageURL  https://github.com/wtxcn/private/blob/main/monarch-auto-refresh/README.md
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js
@@ -31,7 +31,7 @@
   const NAVIGATION_TTL_MS = 45_000;
   const CONFIRM_TIMEOUT_MS = 10 * 60_000;
   // 只暴露脚本版本和通用运行状态，供安装检查使用，不包含账户信息。
-  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.9');
+  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.10');
   const format = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
@@ -149,6 +149,18 @@
     });
   }
 
+  function visibleSyncProgress() {
+    const notice = Array.from(document.querySelectorAll('[class*="RefreshProgressToast__Root"]'))
+      .find(isVisible);
+    if (!notice) return null;
+    const progress = notice.querySelector('[role="progressbar"], progress, [aria-valuenow]');
+    if (!progress) return { percent: null };
+    const value = Number(progress.getAttribute('aria-valuenow') ?? progress.value);
+    const max = Number(progress.getAttribute('aria-valuemax') ?? progress.max ?? 100);
+    return { percent: Number.isFinite(value) && Number.isFinite(max) && max > 0
+      ? Math.max(0, Math.min(100, Math.round(100 * value / max))) : null };
+  }
+
   function checkSyncResult() {
     if (!monitor) return;
     const last = readLast();
@@ -240,7 +252,7 @@
       : '账户列表页按钮未就绪：请检查登录、同步状态或按钮。';
   }
 
-  function renderWidget(page, lastLabel, next) {
+  function renderWidget(page, lastLabel, next, last) {
     const brief = !onAccountsPage() ? '到点进入 Accounts'
       : page.startsWith('此账户') ? '可自动刷新' : '暂不可刷新';
     statusButton.style.cssText = 'position:fixed;z-index:2147483000;'
@@ -281,7 +293,15 @@
       })
         .join('\n') || historyLabel;
     } catch { historyLabel = '日志读取异常'; }
+    let pending = '';
+    if (last?.status === 'clicked' && !last.result && Date.now() - last.at < CONFIRM_TIMEOUT_MS) {
+      const progress = onAccountsPage() ? visibleSyncProgress() : null;
+      pending = progress?.percent === null || !progress
+        ? '本次：等待同步完成提示（最多 10 分钟）'
+        : `本次：同步进度 ${progress.percent}%（最多 10 分钟）`;
+    }
     statusButton.textContent = `↻ Monarch 自动刷新 · ${brief}\n最近：${lastLabel}\n下次：${next}`
+      + (pending ? `\n${pending}` : '')
       + `\n\n刷新日志（最近 10 条）\n${historyLabel}\n\n点击收起 · 拖动移动`;
     statusButton.title = `${page}\n“Monarch 显示同步完成”只表示页面给出完成提示。`;
   }
@@ -326,7 +346,8 @@
       if (last) {
         const status = last.result === 'confirmed' ? '页面显示同步完成'
           : last.result === 'unconfirmed' ? '已点击，未确认完成'
-            : last.status === 'clicked' ? '已调用点击' : '已记录尝试';
+            : last.status === 'clicked' ? Date.now() - last.at < CONFIRM_TIMEOUT_MS
+              ? '已点击，等待同步结果' : '已点击，结果未记录' : '已记录尝试';
         lastLabel = `${format.format(new Date(last.at))} ${status}`;
       }
     } catch {
@@ -341,6 +362,9 @@
       : null));
     root.setAttribute('data-monarch-auto-refresh-outcome', last?.result ||
       (last?.status === 'clicked' ? 'clicked' : last ? 'attempted' : 'none'));
+    const progress = onAccountsPage() ? visibleSyncProgress() : null;
+    root.setAttribute('data-monarch-auto-refresh-progress',
+      progress?.percent === null || !progress ? '' : String(progress.percent));
     const next = nextScheduleLabel(now, last);
     root.setAttribute('data-monarch-auto-refresh-next-schedule', next);
     if (!statusButton || !statusButton.isConnected) {
@@ -359,7 +383,7 @@
       statusButton.addEventListener('pointercancel', onPointerUp);
       (document.body || root).appendChild(statusButton);
     }
-    renderWidget(page, lastLabel, next);
+    renderWidget(page, lastLabel, next, last);
   }
 
   async function tick() {
