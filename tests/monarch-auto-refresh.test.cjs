@@ -16,6 +16,7 @@ function button(options = {}) {
     addEventListener(name, callback) { this[name] = callback; },
     matches(selector) { return selector === ':disabled' && !!options.disabled; },
     closest() { return options.inert ? {} : null; },
+    querySelector() { return options.progress || null; },
     getClientRects() { return options.hidden ? [] : [{ width: 150, height: 40 }]; },
     getBoundingClientRect() { return { left: 300, top: 200 }; },
     click() { this.clicks++; if (options.throwOnClick) throw new Error('click failed'); },
@@ -136,7 +137,7 @@ function environment(iso, options = {}) {
   const prefix = 'data-monarch-auto-refresh-';
   const transaction = environment('2026-11-08T19:59:00Z', { path: '/transactions' });
   await flush();
-  check(transaction.state.attrs[prefix + 'version'], '1.0.8', 'diagnostics exposes current version');
+  check(transaction.state.attrs[prefix + 'version'], '1.0.9', 'diagnostics exposes current version');
   check(transaction.state.attrs[prefix + 'page'], 'other', 'non-account route is observable');
   check(transaction.state.attrs[prefix + 'page-status'].includes('自动进入 Accounts'), true, 'non-account explanation is explicit');
   check(transaction.state.attrs[prefix + 'status'].includes('等待下次计划'), true, 'outside-window status explains waiting');
@@ -239,6 +240,22 @@ function environment(iso, options = {}) {
     true, 'completion monitor targets Monarch actual toast component');
   check(completed.state.attrs[prefix + 'outcome'], 'confirmed', 'confirmed result is exposed for diagnostics');
   check(completed.clicks(), 1, 'completion observation does not repeat refresh');
+
+  const progress = value => ({ getAttribute(name) {
+    return name === 'aria-valuenow' ? String(value) : name === 'aria-valuemax' ? '100' : null;
+  } });
+  const progressing = environment('2026-11-08T11:00:00Z');
+  await flush();
+  progressing.state.notices = [button({ name: 'Sync complete Your accounts are up to date',
+    progress: progress(60) })];
+  await progressing.at('2026-11-08T11:01:00Z');
+  check(JSON.parse(progressing.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'clicked', 'incomplete progress cannot confirm sync');
+  progressing.state.notices = [button({ name: 'Sync complete Your accounts are up to date',
+    progress: progress(100) })];
+  await progressing.at('2026-11-08T11:02:00Z');
+  check(JSON.parse(progressing.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'confirmed', 'full progress plus completion text confirms sync');
 
   const noNotice = environment('2026-11-08T11:00:00Z');
   await flush();
