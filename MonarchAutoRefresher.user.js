@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monarch 定时 Refresh all
 // @namespace    local.monarch.auto-refresh
-// @version      1.0.4
+// @version      1.0.5
 // @description  每天 05:00 起每 3 小时进入 Accounts 并点击 Refresh all（America/Chicago）。
 // @homepageURL  https://github.com/wtxcn/private/blob/main/monarch-auto-refresh/README.md
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js
@@ -25,10 +25,13 @@
   const LOCK_NAME = 'monarch-auto-refresh:v1';
   const ACCOUNTS_HEARTBEAT_KEY = 'monarch-auto-refresh:accounts-heartbeat:v1';
   const NAVIGATION_KEY = 'monarch-auto-refresh:navigation:v1';
+  const HISTORY_KEY = 'monarch-auto-refresh:history:v1';
+  const POSITION_KEY = 'monarch-auto-refresh:widget-position:v1';
   const HEARTBEAT_TTL_MS = 45_000;
   const NAVIGATION_TTL_MS = 45_000;
+  const CONFIRM_TIMEOUT_MS = 10 * 60_000;
   // 只暴露脚本版本和通用运行状态，供安装检查使用，不包含账户信息。
-  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.4');
+  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.5');
   const format = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
@@ -36,6 +39,10 @@
   let running = false;
   let lastMessage = '';
   let statusButton;
+  let expanded = false;
+  let monitor = null;
+  let drag = null;
+  let suppressClickUntil = 0;
 
   function onAccountsPage() {
     return /^\/accounts\/?$/.test(location.pathname);
@@ -89,6 +96,63 @@
     return value;
   }
 
+  function readHistory() {
+    const raw = localStorage.getItem(HISTORY_KEY);
+    if (raw === null) return [];
+    const entries = JSON.parse(raw);
+    if (!Array.isArray(entries)) throw new Error('刷新日志格式异常。');
+    return entries;
+  }
+
+  function recordOutcome(slot, at, outcome) {
+    const history = readHistory().filter(entry => entry.slot !== slot);
+    history.unshift({ slot, at, outcome });
+    localStorage.setItem(HISTORY_KEY, JSON.stringify(history.slice(0, 30)));
+    document.documentElement.setAttribute('data-monarch-auto-refresh-outcome', outcome);
+    if (outcome === 'confirmed' || outcome === 'unconfirmed') {
+      const last = readLast();
+      if (last?.slot === slot) {
+        last.result = outcome;
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(last));
+      }
+    }
+  }
+
+  function syncCompleteVisible() {
+    const notices = document.querySelectorAll('[role="status"], [role="alert"], [data-sonner-toast]');
+    return Array.from(notices).some(element => isVisible(element)
+      && /sync complete/i.test(element.textContent || '')
+      && /accounts are up to date/i.test(element.textContent || ''));
+  }
+
+  function checkSyncResult() {
+    if (!monitor) return;
+    const now = Date.now();
+    const visible = syncCompleteVisible();
+    if (!visible) monitor.sawAbsent = true;
+    if (visible && monitor.sawAbsent) {
+      recordOutcome(monitor.slot, now, 'confirmed');
+      log(`${monitor.slot}：Monarch 显示 Sync complete / All accounts are up to date。`);
+      monitor = null;
+    } else if (now - monitor.at >= CONFIRM_TIMEOUT_MS) {
+      recordOutcome(monitor.slot, now, 'unconfirmed');
+      log(`${monitor.slot}：已点击，但 10 分钟内未观察到 Monarch 同步完成提示。`);
+      monitor = null;
+    }
+  }
+
+  function startSyncMonitor(slot, at, sawAbsent) {
+    monitor = { slot, at, sawAbsent };
+    if (typeof MutationObserver === 'function') {
+      const observer = new MutationObserver(() => {
+        try { checkSyncResult(); } catch (error) { log(`同步状态检查失败：${error.message}`); }
+        if (!monitor) observer.disconnect();
+      });
+      observer.observe(document.body || document.documentElement,
+        { childList: true, characterData: true, subtree: true });
+    }
+  }
+
   function recent(record, now, ttl) {
     return record && record.at <= now && now - record.at < ttl;
   }
@@ -137,6 +201,77 @@
       : '账户列表页按钮未就绪：请检查登录、同步状态或按钮。';
   }
 
+  function renderWidget(page, lastLabel, next) {
+    const brief = !onAccountsPage() ? '到点进入 Accounts'
+      : page.startsWith('此账户') ? '可自动刷新' : '暂不可刷新';
+    statusButton.style.cssText = 'position:fixed;z-index:2147483000;'
+      + 'border:1px solid #cbd5e1;border-radius:12px;background:#f8fafc;color:#0f172a;'
+      + 'box-shadow:0 2px 8px #0003;cursor:grab;touch-action:none;'
+      + 'font:12px/1.5 system-ui,sans-serif;text-align:left;white-space:pre-line;'
+      + (expanded ? 'width:300px;max-height:260px;overflow:auto;padding:10px;' :
+        'width:38px;height:38px;padding:0;text-align:center;font-size:24px;');
+    try {
+      const position = JSON.parse(localStorage.getItem(POSITION_KEY) || 'null');
+      if (position && Number.isFinite(position.x) && Number.isFinite(position.y)) {
+        statusButton.style.left = `${Math.max(0, Math.min(position.x, window.innerWidth - (expanded ? 300 : 38)))}px`;
+        statusButton.style.top = `${Math.max(0, Math.min(position.y, window.innerHeight - (expanded ? 260 : 38)))}px`;
+      } else {
+        statusButton.style.right = '10px';
+        statusButton.style.bottom = '175px';
+      }
+    } catch {
+      statusButton.style.right = '10px';
+      statusButton.style.bottom = '175px';
+    }
+    if (!expanded) {
+      statusButton.textContent = '↻';
+      statusButton.title = `Monarch 自动刷新 · ${brief}。点击展开，拖动可移动。`;
+      return;
+    }
+    let historyLabel = '暂无刷新记录';
+    try {
+      const labels = { clicked: '已点击，等待同步结果', confirmed: 'Monarch 显示同步完成',
+        unconfirmed: '已点击，未确认完成', attempted: '已记录尝试',
+        click_error: '按钮点击报错' };
+      historyLabel = readHistory().slice(0, 10).map(entry =>
+        `${format.format(new Date(entry.at))} ${labels[entry.outcome] || entry.outcome}`)
+        .join('\n') || historyLabel;
+    } catch { historyLabel = '日志读取异常'; }
+    statusButton.textContent = `↻ Monarch 自动刷新 · ${brief}\n最近：${lastLabel}\n下次：${next}`
+      + `\n\n刷新日志（最近 10 条）\n${historyLabel}\n\n点击收起 · 拖动移动`;
+    statusButton.title = `${page}\n“Monarch 显示同步完成”只表示页面给出完成提示。`;
+  }
+
+  function onPointerDown(event) {
+    if (event.button !== 0) return;
+    const rect = statusButton.getBoundingClientRect();
+    drag = { x: event.clientX, y: event.clientY, left: rect.left, top: rect.top, moved: false };
+    statusButton.setPointerCapture?.(event.pointerId);
+  }
+
+  function onPointerMove(event) {
+    if (!drag) return;
+    const dx = event.clientX - drag.x;
+    const dy = event.clientY - drag.y;
+    if (Math.abs(dx) + Math.abs(dy) < 5 && !drag.moved) return;
+    drag.moved = true;
+    statusButton.style.right = 'auto';
+    statusButton.style.bottom = 'auto';
+    statusButton.style.left = `${Math.max(0, Math.min(drag.left + dx, window.innerWidth - (expanded ? 300 : 38)))}px`;
+    statusButton.style.top = `${Math.max(0, Math.min(drag.top + dy, window.innerHeight - (expanded ? 260 : 38)))}px`;
+  }
+
+  function onPointerUp() {
+    if (!drag) return;
+    if (drag.moved) {
+      suppressClickUntil = Date.now() + 500;
+      try { localStorage.setItem(POSITION_KEY, JSON.stringify({
+        x: parseFloat(statusButton.style.left), y: parseFloat(statusButton.style.top),
+      })); } catch (error) { log(`图标位置保存失败：${error.message}`); }
+    }
+    drag = null;
+  }
+
   function updateDiagnostics(now) {
     const root = document.documentElement;
     const page = pageStatus();
@@ -145,7 +280,9 @@
     try {
       last = readLast();
       if (last) {
-        const status = last.status === 'clicked' ? '已调用点击' : '已记录尝试';
+        const status = last.result === 'confirmed' ? '页面显示同步完成'
+          : last.result === 'unconfirmed' ? '已点击，未确认完成'
+            : last.status === 'clicked' ? '已调用点击' : '已记录尝试';
         lastLabel = `${format.format(new Date(last.at))} ${status}`;
       }
     } catch {
@@ -158,29 +295,32 @@
     root.setAttribute('data-monarch-auto-refresh-last-attempt', JSON.stringify(last
       ? { slot: last.slot, at: last.at, status: last.status === 'clicked' ? 'clicked' : 'attempted' }
       : null));
+    root.setAttribute('data-monarch-auto-refresh-outcome', last?.result ||
+      (last?.status === 'clicked' ? 'clicked' : last ? 'attempted' : 'none'));
     const next = nextScheduleLabel(now, last);
     root.setAttribute('data-monarch-auto-refresh-next-schedule', next);
     if (!statusButton || !statusButton.isConnected) {
       statusButton = document.createElement('button');
       statusButton.id = 'monarch-auto-refresh-status-button';
       statusButton.type = 'button';
-      statusButton.setAttribute('aria-label', 'Monarch 自动刷新状态，点击查看诊断');
-      statusButton.style.cssText = 'position:fixed;right:10px;bottom:175px;z-index:1000;'
-        + 'max-width:300px;max-height:100px;overflow:auto;padding:7px 10px;'
-        + 'border:1px solid #cbd5e1;border-radius:8px;background:#f8fafc;color:#0f172a;'
-        + 'font:11px/1.45 system-ui,sans-serif;text-align:left;white-space:pre-line;'
-        + 'box-shadow:0 2px 6px #0002;cursor:pointer;';
-      statusButton.addEventListener('click', showDiagnostics);
+      statusButton.setAttribute('aria-label', 'Monarch 自动刷新状态与日志，点击展开或收起');
+      statusButton.addEventListener('click', () => {
+        if (Date.now() < suppressClickUntil) return;
+        expanded = !expanded;
+        updateDiagnostics(new Date());
+      });
+      statusButton.addEventListener('pointerdown', onPointerDown);
+      statusButton.addEventListener('pointermove', onPointerMove);
+      statusButton.addEventListener('pointerup', onPointerUp);
+      statusButton.addEventListener('pointercancel', onPointerUp);
       (document.body || root).appendChild(statusButton);
     }
-    const brief = !onAccountsPage() ? '到点自动进入 Accounts'
-      : page.startsWith('此账户') ? '此页可自动刷新' : '此页暂不可自动刷新';
-    statusButton.textContent = `Monarch 自动刷新 · ${brief}\n最近：${lastLabel}\n下次：${next}`;
-    statusButton.title = `${page}\n点击查看诊断；“已调用点击”不代表 Monarch 已刷新成功。`;
+    renderWidget(page, lastLabel, next);
   }
 
   async function tick() {
     const checkTime = new Date();
+    try { checkSyncResult(); } catch (error) { log(`同步状态检查失败：${error.message}`); }
     updateDiagnostics(checkTime);
     if (running) return;
     // 只有可执行的 Accounts 标签才报活；其他标签会优先把刷新交给它。
@@ -243,8 +383,16 @@
         }
         // 点击前记为已尝试：即使页面重载或服务器报错，本时点也不会重复请求。
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ slot, at: now, status: 'attempted' }));
-        button.click();
+        recordOutcome(slot, now, 'attempted');
+        const completeWasVisible = syncCompleteVisible();
+        try { button.click(); }
+        catch (error) {
+          recordOutcome(slot, now, 'click_error');
+          throw error;
+        }
         localStorage.setItem(STORAGE_KEY, JSON.stringify({ slot, at: now, status: 'clicked' }));
+        recordOutcome(slot, now, 'clicked');
+        startSyncMonitor(slot, now, !completeWasVisible);
         log(`${slot}：已点击 Refresh all；同步结果请以 Monarch 页面为准。`);
       });
     } catch (error) {
@@ -265,15 +413,30 @@
       `本页状态：${pageStatus()}`,
       `Refresh all 按钮：${findButton() ? '已识别且可点击' : '未就绪 / 不唯一'}`,
       `最近脚本尝试：${last ? JSON.stringify(last) : '暂无'}`,
+      `刷新日志：${JSON.stringify(readHistory().slice(0, 10))}`,
       `下次计划：${nextScheduleLabel(new Date(), last)}`,
       `最近脚本检查：${document.documentElement.getAttribute('data-monarch-auto-refresh-last-check') || '暂无'}`,
       '若已有可用的 Accounts 标签，由它刷新；否则计划窗口内本标签进入 Accounts 后刷新。',
-      '“attempted / clicked”仅表示脚本尝试或调用点击，不代表 Monarch 服务端已成功刷新。',
+      '“clicked”只表示已点击；“confirmed”表示观察到 Monarch 同步完成提示，不保证各银行数据都已更新。',
       '仅在每个计划时点后 10 分钟内执行；错过不补刷。',
     ].join('\n'));
   }
 
   GM_registerMenuCommand('查看计划 / 检查按钮（不执行刷新）', showDiagnostics);
+
+  try {
+    const last = readLast();
+    let history = readHistory();
+    if (last && history.length === 0) {
+      recordOutcome(last.slot, last.at, last.status === 'clicked' ? 'clicked' : 'attempted');
+      history = readHistory();
+    }
+    if (onAccountsPage() && last?.status === 'clicked' && !last.result
+      && history[0]?.slot === last.slot && history[0]?.outcome === 'clicked'
+      && Date.now() - last.at < CONFIRM_TIMEOUT_MS) {
+      startSyncMonitor(last.slot, last.at, false);
+    }
+  } catch (error) { log(`日志恢复失败：${error.message}`); }
 
   log(`已启动。${TIME_ZONE} 每天 ${HOURS.map(h => `${h}:00`).join('、')}；计划窗口内自动进入 Accounts 刷新。`);
   setInterval(tick, CHECK_EVERY_MS);
