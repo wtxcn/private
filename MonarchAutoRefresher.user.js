@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         Monarch 定时 Refresh all
 // @namespace    local.monarch.auto-refresh
-// @version      1.0.3
-// @description  每天 05:00 起，每 3 小时点击 Refresh all，最后一次为 23:00（America/Chicago）。
+// @version      1.0.4
+// @description  每天 05:00 起每 3 小时进入 Accounts 并点击 Refresh all（America/Chicago）。
 // @homepageURL  https://github.com/wtxcn/private/blob/main/monarch-auto-refresh/README.md
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js
@@ -23,8 +23,12 @@
   const MIN_GAP_MS = 170 * 60_000;
   const STORAGE_KEY = 'monarch-auto-refresh:last-attempt:v1';
   const LOCK_NAME = 'monarch-auto-refresh:v1';
+  const ACCOUNTS_HEARTBEAT_KEY = 'monarch-auto-refresh:accounts-heartbeat:v1';
+  const NAVIGATION_KEY = 'monarch-auto-refresh:navigation:v1';
+  const HEARTBEAT_TTL_MS = 45_000;
+  const NAVIGATION_TTL_MS = 45_000;
   // 只暴露脚本版本和通用运行状态，供安装检查使用，不包含账户信息。
-  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.3');
+  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.4');
   const format = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
@@ -77,6 +81,28 @@
     return value;
   }
 
+  function readTimestamp(key) {
+    const raw = localStorage.getItem(key);
+    if (raw === null) return null;
+    const value = JSON.parse(raw);
+    if (!value || !Number.isFinite(value.at)) throw new Error('跨标签协调记录格式异常。');
+    return value;
+  }
+
+  function recent(record, now, ttl) {
+    return record && record.at <= now && now - record.at < ttl;
+  }
+
+  function modalOpen() {
+    return Array.from(document.querySelectorAll('[aria-modal="true"], dialog[open]')).some(isVisible);
+  }
+
+  function editing() {
+    const active = document.activeElement;
+    return !!active && (active.matches('input, textarea, select, [contenteditable="true"]')
+      || !!active.closest('[contenteditable="true"]'));
+  }
+
   function isVisible(element) {
     const style = getComputedStyle(element);
     return style.display !== 'none' && style.visibility !== 'hidden'
@@ -102,12 +128,10 @@
   }
 
   function pageStatus() {
-    if (!onAccountsPage()) return '本页不执行：请另留 Accounts 账户列表标签并保持登录。';
+    if (!onAccountsPage()) return '计划窗口内若没有可用的 Accounts 标签，将自动进入 Accounts 再刷新。';
     if (!navigator.locks?.request) return '账户列表页暂不可执行：浏览器缺少 Web Locks。';
     if (!navigator.onLine) return '账户列表页暂离线：联网后才能执行。';
-    const modalOpen = Array.from(document.querySelectorAll('[aria-modal="true"], dialog[open]'))
-      .some(isVisible);
-    if (modalOpen) return '账户列表页有弹窗：关闭后才能执行。';
+    if (modalOpen()) return '账户列表页有弹窗：关闭后才能执行。';
     return findButton()
       ? '此账户列表页可自动刷新（仅在计划窗口内）。'
       : '账户列表页按钮未就绪：请检查登录、同步状态或按钮。';
@@ -149,20 +173,22 @@
       statusButton.addEventListener('click', showDiagnostics);
       (document.body || root).appendChild(statusButton);
     }
-    const brief = !onAccountsPage() ? '本页不执行（仅 Accounts）'
+    const brief = !onAccountsPage() ? '到点自动进入 Accounts'
       : page.startsWith('此账户') ? '此页可自动刷新' : '此页暂不可自动刷新';
     statusButton.textContent = `Monarch 自动刷新 · ${brief}\n最近：${lastLabel}\n下次：${next}`;
     statusButton.title = `${page}\n点击查看诊断；“已调用点击”不代表 Monarch 已刷新成功。`;
   }
 
   async function tick() {
-    updateDiagnostics(new Date());
-    if (!onAccountsPage()) {
-      log('本页不执行自动刷新：请另留 Accounts 账户列表标签并保持登录。');
-      return;
-    }
+    const checkTime = new Date();
+    updateDiagnostics(checkTime);
     if (running) return;
-    const slot = scheduledSlot(new Date());
+    // 只有可执行的 Accounts 标签才报活；其他标签会优先把刷新交给它。
+    if (onAccountsPage() && pageStatus().startsWith('此账户')) {
+      try { localStorage.setItem(ACCOUNTS_HEARTBEAT_KEY, JSON.stringify({ at: checkTime.getTime() })); }
+      catch (error) { log(`状态记录失败：${error.message}`); return; }
+    }
+    const slot = scheduledSlot(checkTime);
     if (!slot) {
       log('当前不在计划时点后的 10 分钟窗口；等待下次计划，不补刷。');
       return;
@@ -188,9 +214,29 @@
           log('当前离线；会在本次 10 分钟窗口内继续检查。');
           return;
         }
-        const modalOpen = Array.from(document.querySelectorAll('[aria-modal="true"], dialog[open]'))
-          .some(isVisible);
-        const button = modalOpen ? null : findButton();
+        if (!onAccountsPage()) {
+          if (recent(readTimestamp(ACCOUNTS_HEARTBEAT_KEY), now, HEARTBEAT_TTL_MS)) {
+            log('已有可用的 Accounts 标签；由该标签执行刷新。');
+            return;
+          }
+          if (recent(readTimestamp(NAVIGATION_KEY), now, NAVIGATION_TTL_MS)) {
+            log('另一标签正在前往 Accounts；等待它执行。');
+            return;
+          }
+          if (modalOpen() || editing()) {
+            log('当前页面正在编辑或有弹窗；为避免丢失内容，本次暂不切换。');
+            return;
+          }
+          localStorage.setItem(NAVIGATION_KEY, JSON.stringify({ at: now }));
+          log('计划时间已到：正在进入 Accounts，随后点击 Refresh all。');
+          try { location.assign('/accounts?chartType=performance&timeframe=month'); }
+          catch (error) {
+            localStorage.removeItem(NAVIGATION_KEY);
+            throw error;
+          }
+          return;
+        }
+        const button = modalOpen() ? null : findButton();
         if (!button) {
           log('未找到唯一可点击的 Refresh all（可能未登录、正在同步或有弹窗）；窗口内继续检查。');
           return;
@@ -221,7 +267,7 @@
       `最近脚本尝试：${last ? JSON.stringify(last) : '暂无'}`,
       `下次计划：${nextScheduleLabel(new Date(), last)}`,
       `最近脚本检查：${document.documentElement.getAttribute('data-monarch-auto-refresh-last-check') || '暂无'}`,
-      '请独立保留 Accounts 账户列表标签；同一标签切到 Transactions 等页面后不执行。',
+      '若已有可用的 Accounts 标签，由它刷新；否则计划窗口内本标签进入 Accounts 后刷新。',
       '“attempted / clicked”仅表示脚本尝试或调用点击，不代表 Monarch 服务端已成功刷新。',
       '仅在每个计划时点后 10 分钟内执行；错过不补刷。',
     ].join('\n'));
@@ -229,7 +275,7 @@
 
   GM_registerMenuCommand('查看计划 / 检查按钮（不执行刷新）', showDiagnostics);
 
-  log(`已启动。${TIME_ZONE} 每天 ${HOURS.map(h => `${h}:00`).join('、')}；请保持账户列表页打开并登录。`);
+  log(`已启动。${TIME_ZONE} 每天 ${HOURS.map(h => `${h}:00`).join('、')}；计划窗口内自动进入 Accounts 刷新。`);
   setInterval(tick, CHECK_EVERY_MS);
   window.addEventListener('pageshow', tick);
   window.addEventListener('online', tick);
