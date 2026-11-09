@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Monarch 定时 Refresh all
 // @namespace    local.monarch.auto-refresh
-// @version      1.0.6
+// @version      1.0.7
 // @description  每天 05:00 起每 3 小时进入 Accounts 并点击 Refresh all（America/Chicago）。
 // @homepageURL  https://github.com/wtxcn/private/blob/main/monarch-auto-refresh/README.md
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js
@@ -31,7 +31,7 @@
   const NAVIGATION_TTL_MS = 45_000;
   const CONFIRM_TIMEOUT_MS = 10 * 60_000;
   // 只暴露脚本版本和通用运行状态，供安装检查使用，不包含账户信息。
-  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.6');
+  document.documentElement.setAttribute('data-monarch-auto-refresh-version', '1.0.7');
   const format = new Intl.DateTimeFormat('en-CA', {
     timeZone: TIME_ZONE, year: 'numeric', month: '2-digit', day: '2-digit',
     hour: '2-digit', minute: '2-digit', second: '2-digit', hourCycle: 'h23',
@@ -119,7 +119,8 @@
   }
 
   function syncCompleteVisible() {
-    const notices = document.querySelectorAll('[role="status"], [role="alert"], [data-sonner-toast]');
+    const notices = document.querySelectorAll(
+      '[class*="RefreshProgressToast__Root"], [role="status"], [role="alert"], [data-sonner-toast]');
     return Array.from(notices).some(element => isVisible(element)
       && /sync complete/i.test(element.textContent || '')
       && /accounts are up to date/i.test(element.textContent || ''));
