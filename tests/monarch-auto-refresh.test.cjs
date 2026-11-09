@@ -17,12 +17,13 @@ function button(options = {}) {
     matches(selector) { return selector === ':disabled' && !!options.disabled; },
     closest() { return options.inert ? {} : null; },
     getClientRects() { return options.hidden ? [] : [{ width: 150, height: 40 }]; },
+    getBoundingClientRect() { return { left: 300, top: 200 }; },
     click() { this.clicks++; if (options.throwOnClick) throw new Error('click failed'); },
   };
 }
 
 function environment(iso, options = {}) {
-  const state = { now: Date.parse(iso), buttons: options.buttons || [button()], modals: [],
+  const state = { now: Date.parse(iso), buttons: options.buttons || [button()], modals: [], notices: [],
     path: options.path || '/accounts', online: true, events: {}, logs: [], menu: null, tick: null,
     attrs: {}, widgets: [], alerts: [], navigations: [], activeElement: null };
   const shared = options.shared || { storage: new Map(), locked: false };
@@ -57,10 +58,11 @@ function environment(iso, options = {}) {
       },
       body: { appendChild(element) { element.isConnected = true; state.widgets.push(element); } },
       createElement: () => button({ name: '' }),
-      querySelectorAll: selector => selector.startsWith('button') ? [...state.buttons, ...state.widgets] : state.modals,
+      querySelectorAll: selector => selector.startsWith('button') ? [...state.buttons, ...state.widgets]
+        : selector.startsWith('[role="status"]') ? state.notices : state.modals,
       addEventListener: (name, fn) => { state.events[name] = fn; },
     },
-    window: { addEventListener: (name, fn) => { state.events[name] = fn; } },
+    window: { innerWidth: 1200, innerHeight: 800, addEventListener: (name, fn) => { state.events[name] = fn; } },
     getComputedStyle: element => element.style,
     setInterval: fn => { state.tick = fn; },
     GM_registerMenuCommand: (name, fn) => { state.menu = fn; }, alert: value => state.alerts.push(value),
@@ -122,6 +124,8 @@ function environment(iso, options = {}) {
   const failed = environment('2026-11-08T11:00:00Z', { buttons: [button({ throwOnClick: true })] });
   await flush(); await failed.at('2026-11-08T11:01:00Z');
   check(failed.clicks(), 1, 'failed attempt does not repeat');
+  check(JSON.parse(failed.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'click_error', 'button error is explicit in log');
   const corrupt = { storage: new Map([['monarch-auto-refresh:last-attempt:v1', '{bad']]), locked: false };
   const invalid = environment('2026-11-08T11:00:00Z', { shared: corrupt });
   await flush(); check(invalid.clicks(), 0, 'corrupt record fails closed');
@@ -129,7 +133,7 @@ function environment(iso, options = {}) {
   const prefix = 'data-monarch-auto-refresh-';
   const transaction = environment('2026-11-08T19:59:00Z', { path: '/transactions' });
   await flush();
-  check(transaction.state.attrs[prefix + 'version'], '1.0.4', 'diagnostics exposes current version');
+  check(transaction.state.attrs[prefix + 'version'], '1.0.5', 'diagnostics exposes current version');
   check(transaction.state.attrs[prefix + 'page'], 'other', 'non-account route is observable');
   check(transaction.state.attrs[prefix + 'page-status'].includes('自动进入 Accounts'), true, 'non-account explanation is explicit');
   check(transaction.state.attrs[prefix + 'status'].includes('等待下次计划'), true, 'outside-window status explains waiting');
@@ -137,11 +141,14 @@ function environment(iso, options = {}) {
   check(transaction.state.attrs[prefix + 'last-attempt'], 'null', 'no attempt is exposed on a skipped page');
   check(transaction.state.widgets.length, 1, 'one small status button is attached');
   const widget = transaction.state.widgets[0];
-  check(widget.textContent.includes('到点自动进入 Accounts'), true, 'status button explains non-account route');
-  check(widget.textContent.includes('暂无脚本尝试'), true, 'status button exposes lack of attempt');
-  check(widget.textContent.includes('2026-11-08 14:00'), true, 'status button shows next Chicago schedule');
+  check(widget.textContent, '↻', 'status button is compact by default');
   widget.click();
-  check(transaction.state.alerts.length, 1, 'status button opens diagnostics');
+  check(widget.textContent.includes('到点进入 Accounts'), true, 'expanded widget explains route');
+  check(widget.textContent.includes('暂无脚本尝试'), true, 'expanded widget exposes lack of attempt');
+  check(widget.textContent.includes('2026-11-08 14:00'), true, 'expanded widget shows next schedule');
+  check(widget.textContent.includes('刷新日志'), true, 'expanded widget shows log');
+  transaction.state.menu();
+  check(transaction.state.alerts.length, 1, 'menu opens diagnostics');
   check(transaction.clicks(), 0, 'viewing diagnostics never refreshes accounts');
   await transaction.at('2026-11-08T19:59:15Z');
   check(transaction.state.attrs[prefix + 'last-check'], '2026-11-08T19:59:15.000Z', 'non-account ticks still update last check');
@@ -158,7 +165,7 @@ function environment(iso, options = {}) {
   const recorded = JSON.parse(transaction.state.attrs[prefix + 'last-attempt']);
   check(recorded.slot, 'America/Chicago:2026-11-08T14:00', 'DOM record exposes actual attempted slot');
   check(recorded.status, 'clicked', 'DOM record is updated after native click');
-  check(widget.textContent.includes('已调用点击'), true, 'status button distinguishes click from server success');
+  check(widget.textContent.includes('已调用点击'), true, 'widget distinguishes click from server success');
   check(widget.textContent.includes('2026-11-08 17:00'), true, 'next schedule advances after scheduled hour');
   await transaction.at('2026-11-08T20:02:00Z');
   check(transaction.clicks(), 1, 'diagnostic updates preserve same-slot deduplication');
@@ -212,5 +219,49 @@ function environment(iso, options = {}) {
   await navFail.at('2026-11-08T11:00:00Z');
   check(navFail.state.navigations.length, 0, 'failed navigation does not falsely succeed');
   check(navFail.shared.storage.has('monarch-auto-refresh:navigation:v1'), false, 'failed navigation reservation is cleared');
+
+  const completed = environment('2026-11-08T11:00:00Z');
+  await flush();
+  check(JSON.parse(completed.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'clicked', 'click is logged without claiming success');
+  completed.state.notices = [button({ name: 'Sync complete Your accounts are up to date All accounts are up to date' })];
+  await completed.at('2026-11-08T11:01:00Z');
+  check(JSON.parse(completed.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'confirmed', 'native completion notice confirms sync');
+  check(completed.state.attrs[prefix + 'outcome'], 'confirmed', 'confirmed result is exposed for diagnostics');
+  check(completed.clicks(), 1, 'completion observation does not repeat refresh');
+
+  const noNotice = environment('2026-11-08T11:00:00Z');
+  await flush();
+  await noNotice.at('2026-11-08T11:10:00Z');
+  check(JSON.parse(noNotice.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'unconfirmed', 'missing completion notice is not reported as success');
+
+  const staleNotice = environment('2026-11-08T10:59:00Z');
+  await flush();
+  staleNotice.state.notices = [button({ name: 'Sync complete Your accounts are up to date' })];
+  await staleNotice.at('2026-11-08T11:00:00Z');
+  await staleNotice.at('2026-11-08T11:01:00Z');
+  check(JSON.parse(staleNotice.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'clicked', 'preexisting completion notice cannot confirm new refresh');
+  staleNotice.state.notices = [];
+  await staleNotice.at('2026-11-08T11:02:00Z');
+  staleNotice.state.notices = [button({ name: 'Sync complete Your accounts are up to date' })];
+  await staleNotice.at('2026-11-08T11:03:00Z');
+  check(JSON.parse(staleNotice.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
+    'confirmed', 'new completion notice after disappearance confirms refresh');
+
+  const movable = environment('2026-11-08T10:00:00Z');
+  await flush();
+  const iconWidget = movable.state.widgets[0];
+  iconWidget.pointerdown({ button: 0, clientX: 310, clientY: 210, pointerId: 1 });
+  iconWidget.pointermove({ clientX: 360, clientY: 250 });
+  iconWidget.pointerup();
+  check(JSON.parse(movable.shared.storage.get('monarch-auto-refresh:widget-position:v1')).x, 350,
+    'dragged icon position is saved');
+  check(iconWidget.textContent, '↻', 'drag does not expand icon');
+  const reopened = environment('2026-11-08T10:01:00Z', { shared: movable.shared });
+  await flush();
+  check(reopened.state.widgets[0].style.left, '350px', 'icon position survives reload');
   console.log(`PASS: ${assertions} checks; no real browser clicks or network requests.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
