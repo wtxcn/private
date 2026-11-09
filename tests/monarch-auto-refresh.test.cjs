@@ -1,7 +1,7 @@
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
 const vm = require('node:vm');
-const source = fs.readFileSync(require('node:path').join(__dirname, '..', 'MonarchAutoRefresher.user.js'), 'utf8');
+const source = fs.readFileSync('outputs/monarch-auto-refresh.user.js', 'utf8');
 let assertions = 0;
 const check = (actual, expected, message) => { assert.equal(actual, expected, message); assertions++; };
 const flush = () => new Promise(resolve => setImmediate(resolve));
@@ -24,7 +24,7 @@ function button(options = {}) {
 function environment(iso, options = {}) {
   const state = { now: Date.parse(iso), buttons: options.buttons || [button()], modals: [],
     path: options.path || '/accounts', online: true, events: {}, logs: [], menu: null, tick: null,
-    attrs: {}, widgets: [], alerts: [] };
+    attrs: {}, widgets: [], alerts: [], navigations: [], activeElement: null };
   const shared = options.shared || { storage: new Map(), locked: false };
   class FakeDate extends Date {
     constructor(...args) { super(...(args.length ? args : [state.now])); }
@@ -32,7 +32,10 @@ function environment(iso, options = {}) {
   }
   const context = {
     Date: FakeDate, Intl, console: { info: (...items) => state.logs.push(items.join(' ')) },
-    location: { get pathname() { return state.path; } },
+    location: { get pathname() { return state.path; }, assign(url) {
+      if (options.navigationFails) throw new Error('navigation failed');
+      state.navigations.push(url);
+    } },
     navigator: {
       get onLine() { return state.online; },
       locks: options.noLocks ? null : { async request(name, config, callback) {
@@ -44,8 +47,10 @@ function environment(iso, options = {}) {
     localStorage: {
       getItem: key => shared.storage.get(key) ?? null,
       setItem: (key, value) => { if (options.storageFails) throw new Error('storage denied'); shared.storage.set(key, value); },
+      removeItem: key => shared.storage.delete(key),
     },
     document: {
+      get activeElement() { return state.activeElement; },
       documentElement: {
         setAttribute: (name, value) => { state.attrs[name] = value; },
         getAttribute: name => state.attrs[name] ?? null,
@@ -101,8 +106,7 @@ function environment(iso, options = {}) {
     const env = environment('2026-11-08T11:00:00Z', { buttons });
     await flush(); check(env.clicks(), 0, 'reject absent/disabled/ambiguous button');
   }
-  for (const options of [{ path: '/dashboard' }, { path: '/accounts/details/123' },
-    { noLocks: true }, { storageFails: true }]) {
+  for (const options of [{ noLocks: true }, { storageFails: true }]) {
     const env = environment('2026-11-08T11:00:00Z', options);
     await flush(); check(env.clicks(), 0, 'route or safe coordination unavailable');
   }
@@ -125,15 +129,15 @@ function environment(iso, options = {}) {
   const prefix = 'data-monarch-auto-refresh-';
   const transaction = environment('2026-11-08T19:59:00Z', { path: '/transactions' });
   await flush();
-  check(transaction.state.attrs[prefix + 'version'], '1.0.3', 'diagnostics exposes current version');
+  check(transaction.state.attrs[prefix + 'version'], '1.0.4', 'diagnostics exposes current version');
   check(transaction.state.attrs[prefix + 'page'], 'other', 'non-account route is observable');
-  check(transaction.state.attrs[prefix + 'page-status'].includes('本页不执行'), true, 'non-account explanation is explicit');
-  check(transaction.state.attrs[prefix + 'status'].includes('Accounts'), true, 'non-account status explains required page');
+  check(transaction.state.attrs[prefix + 'page-status'].includes('自动进入 Accounts'), true, 'non-account explanation is explicit');
+  check(transaction.state.attrs[prefix + 'status'].includes('等待下次计划'), true, 'outside-window status explains waiting');
   check(transaction.state.attrs[prefix + 'last-check'], '2026-11-08T19:59:00.000Z', 'startup check is timestamped');
   check(transaction.state.attrs[prefix + 'last-attempt'], 'null', 'no attempt is exposed on a skipped page');
   check(transaction.state.widgets.length, 1, 'one small status button is attached');
   const widget = transaction.state.widgets[0];
-  check(widget.textContent.includes('本页不执行（仅 Accounts）'), true, 'status button explains non-account route');
+  check(widget.textContent.includes('到点自动进入 Accounts'), true, 'status button explains non-account route');
   check(widget.textContent.includes('暂无脚本尝试'), true, 'status button exposes lack of attempt');
   check(widget.textContent.includes('2026-11-08 14:00'), true, 'status button shows next Chicago schedule');
   widget.click();
@@ -144,6 +148,7 @@ function environment(iso, options = {}) {
   check(transaction.state.widgets.length, 1, 'status button is reused across ticks');
   await transaction.at('2026-11-08T20:00:00Z');
   check(transaction.clicks(), 0, '14:00 cannot refresh a transactions page');
+  check(transaction.state.navigations.length, 1, 'due transactions page navigates to Accounts');
   check(transaction.state.attrs[prefix + 'next-schedule'].includes('14:00（中部，当前窗口）'), true,
     'an unattempted current window remains visible');
   transaction.state.path = '/accounts';
@@ -159,11 +164,53 @@ function environment(iso, options = {}) {
   check(transaction.clicks(), 1, 'diagnostic updates preserve same-slot deduplication');
   transaction.state.path = '/transactions';
   await transaction.at('2026-11-08T23:00:00Z');
-  check(transaction.clicks(), 1, 'navigating away still prevents the next planned refresh');
+  check(transaction.state.navigations.length, 2, 'next slot navigates from transactions again');
   check(transaction.state.attrs[prefix + 'last-attempt'], JSON.stringify(recorded), 'non-account diagnostics retain attempt record');
   const rollover = environment('2026-11-09T05:59:00Z', { path: '/transactions' });
   await flush();
   check(rollover.state.attrs[prefix + 'next-schedule'], '2026-11-09 05:00（中部）', 'next schedule rolls to next Chicago date');
   check(JSON.parse(failed.state.attrs[prefix + 'last-attempt']).status, 'attempted', 'failed click remains an attempt, not success');
+
+  const routeShared = { storage: new Map(), locked: false };
+  const fromOther = environment('2026-11-08T10:59:00Z', { path: '/transactions', shared: routeShared });
+  await flush();
+  await fromOther.at('2026-11-08T11:00:00Z');
+  check(fromOther.state.navigations.length, 1, 'other route goes to Accounts at schedule');
+  const arrived = environment('2026-11-08T11:00:10Z', { shared: routeShared });
+  await flush();
+  check(arrived.clicks(), 1, 'arriving Accounts page clicks Refresh all');
+  check(fromOther.clicks(), 0, 'other route does not click its own controls');
+
+  const activeShared = { storage: new Map(), locked: false };
+  const activeAccounts = environment('2026-11-08T10:59:00Z', { shared: activeShared });
+  const activeOther = environment('2026-11-08T10:59:00Z', { path: '/transactions', shared: activeShared });
+  await flush();
+  await activeAccounts.at('2026-11-08T11:00:00Z');
+  await activeOther.at('2026-11-08T11:00:00Z');
+  check(activeAccounts.clicks(), 1, 'existing Accounts tab executes');
+  check(activeOther.state.navigations.length, 0, 'other tab stays put when Accounts tab executes');
+
+  const raceShared = { storage: new Map(), locked: false };
+  const first = environment('2026-11-08T10:59:00Z', { path: '/transactions', shared: raceShared });
+  const second = environment('2026-11-08T10:59:00Z', { path: '/dashboard', shared: raceShared });
+  await flush();
+  await first.at('2026-11-08T11:00:00Z');
+  await second.at('2026-11-08T11:00:00Z');
+  check(first.state.navigations.length + second.state.navigations.length, 1, 'only one tab navigates');
+
+  const edit = environment('2026-11-08T10:59:00Z', { path: '/transactions' });
+  await flush();
+  edit.state.activeElement = { matches: () => true, closest: () => null };
+  await edit.at('2026-11-08T11:00:00Z');
+  check(edit.state.navigations.length, 0, 'active editing blocks navigation');
+  edit.state.activeElement = null;
+  await edit.at('2026-11-08T11:01:00Z');
+  check(edit.state.navigations.length, 1, 'navigation resumes after editing');
+
+  const navFail = environment('2026-11-08T10:59:00Z', { path: '/transactions', navigationFails: true });
+  await flush();
+  await navFail.at('2026-11-08T11:00:00Z');
+  check(navFail.state.navigations.length, 0, 'failed navigation does not falsely succeed');
+  check(navFail.shared.storage.has('monarch-auto-refresh:navigation:v1'), false, 'failed navigation reservation is cleared');
   console.log(`PASS: ${assertions} checks; no real browser clicks or network requests.`);
 })().catch(error => { console.error(error); process.exitCode = 1; });
