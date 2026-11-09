@@ -2,7 +2,7 @@
 
 [安装 MonarchAutoRefresher.user.js](https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js)
 
-Tampermonkey 用户脚本，v1.0.6。使用 Monarch 页面现有的 `Refresh all` 按钮，复用当前登录状态。
+Tampermonkey 用户脚本，v1.0.7。使用 Monarch 页面现有的 `Refresh all` 按钮，复用当前登录状态。
 
 ## 安装
 
@@ -51,14 +51,14 @@ const HOURS = [2, 5, 8, 11, 14, 17, 20, 23];
 
 ## 本地验证
 
-已在 Monarch 账户列表页面核实原生按钮，并兼容按钮中的图标字体字符。合成测试不包含真实账户数据，覆盖冬夏时区、固定时点、宽限期、其他页面进入 Accounts、跨标签与重载去重、编辑与弹窗、离线、同步提示确认、超时未确认、旧提示排除及图标位置保存。
+已在 Monarch 账户列表页面核实原生按钮和同步完成提示组件；2026-11-08 20:00 中部时间观察到旧版从 Transactions 自动进入 Accounts、调用刷新，并由 Monarch 显示同步完成。合成测试不包含真实账户数据，覆盖冬夏时区、固定时点、宽限期、其他页面进入 Accounts、跨标签与重载去重、编辑与弹窗、离线、同步提示确认、超时未确认、旧提示排除及图标位置保存。
 
 ```sh
 node --check MonarchAutoRefresher.user.js
 node tests/monarch-auto-refresh.test.cjs
 ```
 
-本地模拟检查不能证明浏览器实际后台定时触发或银行同步成功；安装后的真实定时执行仍需在浏览器中确认。页面根元素的 `data-monarch-auto-refresh-version` 和 `data-monarch-auto-refresh-status` 属性仅包含版本及通用运行状态，可用于诊断是否已加载。v1.0.6 还公开以下诊断属性，不包含账户信息：
+本地模拟检查不能证明浏览器实际后台定时触发或银行同步成功；安装后的真实定时执行仍需在浏览器中确认。页面根元素的 `data-monarch-auto-refresh-version` 和 `data-monarch-auto-refresh-status` 属性仅包含版本及通用运行状态，可用于诊断是否已加载。v1.0.7 还公开以下诊断属性，不包含账户信息：
 
 - `data-monarch-auto-refresh-last-check`：最近一次脚本检查时间。
 - `data-monarch-auto-refresh-page`：当前页面类型。
