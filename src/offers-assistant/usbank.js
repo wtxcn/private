@@ -2,6 +2,7 @@ function createUSBankAdapter(env) {
   const { all, text, normalize, visible, enabled, click, sleep, waitFor, check, imageUrl, collect } = env;
   const MODAL = "#vicinity-overlay-click-modal, .cashback-offer-detail, .usb-modal-v2--dialog, .usb-modal-v2";
   const scope = { id: "cashback-deals", name: "Cash-back deals", kind: "scope" };
+  const redeemedScope = { id: "cashback-redeemed", name: "U.S. Bank redeemed deals", kind: "scope" };
   function assertPage() {
     if (!/\/cashback-deals/i.test(location.href)) throw new Error("Open U.S. Bank cash-back deals first.");
     if (all('input[type="password"]').some(visible)) throw new Error("Sign in to U.S. Bank and open cash-back deals.");
@@ -137,6 +138,25 @@ function createUSBankAdapter(env) {
     return { key, name, description: [reward, expiry].filter(Boolean).join(" / "), imageUrl: imageUrl(node), status: "unknown", node };
   }
   const readOffers = () => buttons().map(readButton).filter(Boolean);
+  function redeemedTab() {
+    return all('[role="tab"]').find(node => visible(node) && /^Redeemed$/i.test(text(node))) || null;
+  }
+  function redeemedPageReady() {
+    const tab = redeemedTab();
+    return tab?.getAttribute('aria-selected') === 'true'
+      && all('h3').some(node => visible(node) && /^Redeemed deals(?:\s*\(\d+\))?$/i.test(text(node)));
+  }
+  function redeemedListSettled() {
+    if (!redeemedPageReady()) return false;
+    if (readOffers().length) return true;
+    return all('p, h3, h4, [role="status"], [data-testid]').some(node => visible(node)
+      && /(?:no|haven.t|have not|0)\s+(?:redeemed\s+)?(?:deals?|offers?)\s*(?:redeemed)?|(?:deals?|offers?)\s+(?:redeemed\s+)?(?:yet|in the (?:past|last)|available)/i.test(text(node)));
+  }
+  function readRedeemedOffers() {
+    if (!redeemedPageReady()) return [];
+    return readOffers().map(offer => ({ ...offer, status: 'redeemed',
+      card: detailCard(offer.node) || { ...redeemedScope } }));
+  }
   async function openDetail(offer) {
     assertPage(); check();
     // Never reuse a success banner from a different offer's modal.
@@ -180,13 +200,22 @@ function createUSBankAdapter(env) {
       return [...inspected.values()];
     }, assertPage);
     if (!result.offers.length) throw new Error("No recognizable cash-back deals. Existing scan retained.");
+    let redeemed = [];
+    const redeemedControl = redeemedTab();
+    if (redeemedControl) {
+      click(redeemedControl);
+      await waitFor(redeemedListSettled, 12000);
+      redeemed = (await collect(readRedeemedOffers, assertPage)).offers;
+      const allControl = all('button, [role="tab"]').find(node => visible(node) && /^All deals$/i.test(text(node)));
+      if (allControl) { click(allControl); await waitFor(() => allControl.getAttribute('aria-selected') === 'true', 8000); }
+    }
     if (!eligibleCards.length) {
       env.log("U.S. Bank did not expose a recognizable card ending; keeping the account-level collection.");
-      return result;
+      return { ...result, offers: [...result.offers, ...redeemed] };
     }
     return {
       ...result,
-      offers: result.offers.flatMap(offer => eligibleCards.map(card => ({ ...offer, card })))
+      offers: [...result.offers.flatMap(offer => eligibleCards.map(card => ({ ...offer, card }))), ...redeemed]
     };
   }
   async function addOffer(card, offer) {
@@ -211,5 +240,5 @@ function createUSBankAdapter(env) {
       await closeDetail(detail);
     }
   }
-  return { assertPage, cardFromText, cardFromAccountText, accountCards, pageCard, detailCard, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, modal, activated, activateButton, closeDetail };
+  return { assertPage, cardFromText, cardFromAccountText, accountCards, pageCard, detailCard, currentCard, discoverCards, openCard, scanCard, addOffer, readOffers, readButton, redeemedPageReady, redeemedListSettled, readRedeemedOffers, modal, activated, activateButton, closeDetail };
 }

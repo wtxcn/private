@@ -141,6 +141,7 @@ function createOffersAssistant(config, adapterFactory) {
     return snapshot.offers.filter(offer => {
       if (cardId && !offer.cards[cardId]) return false;
       if (view === "added" && !fullyAdded(offer)) return false;
+      if (view === "redeemed" && !Object.values(offer.cards).includes("redeemed")) return false;
       if (view === "addable" && !Object.values(offer.cards).includes("addable")) return false;
       if (view === "unknown" && !Object.values(offer.cards).includes("unknown")) return false;
       if (view === "selected" && !snapshot.selected[offer.key]?.length) return false;
@@ -196,14 +197,15 @@ function createOffersAssistant(config, adapterFactory) {
     for (const target of targets.values()) upsertCard(target);
     // A filtered or lazy-loaded grid can omit a previously seen offer. Absence is not enrollment.
     if (complete) for (const offer of offers.values()) for (const target of targets.values()) {
-      if (offer.cards[target.id]) offer.cards[target.id] = "unknown";
+      if (offer.cards[target.id] && offer.cards[target.id] !== "redeemed") offer.cards[target.id] = "unknown";
     }
     for (const item of incoming) {
       const target = item.card?.id ? item.card : card;
       const offer = offers.get(item.key) || { key: item.key, name: item.name, description: item.description || "", imageUrl: item.imageUrl || "", cards: {} };
       offer.name = item.name;
       offer.description = item.description || "";
-      offer.cards[target.id] = ["added", "addable"].includes(item.status) ? item.status : "unknown";
+      offer.cards[target.id] = offer.cards[target.id] === "redeemed" || item.status === "redeemed" ? "redeemed"
+        : ["added", "addable"].includes(item.status) ? item.status : "unknown";
       if (item.imageUrl) offer.imageUrl = item.imageUrl;
       offers.set(item.key, offer);
     }
@@ -346,8 +348,8 @@ function createOffersAssistant(config, adapterFactory) {
     root.querySelector("[data-add]").disabled = busy || !count;
     root.querySelector("[data-add]").textContent = `Add selected (${count})`;
     root.querySelector("[data-stop]").disabled = !busy;
-    const groups = ["all", "addable", "added", "unknown", "selected"];
-    const names = { all: "All", addable: "Addable", added: "Added", unknown: "Unverified", selected: "Selected" };
+    const groups = ["all", "addable", "added", "redeemed", "unknown", "selected"];
+    const names = { all: "All", addable: "Addable", added: "Added", redeemed: "Redeemed", unknown: "Unverified", selected: "Selected" };
     root.querySelector("[data-stats]").innerHTML = `<button class="stat ${cardSummary ? "active" : ""}" data-summary><b>${snapshot.cards.length}</b>${escape(config.scopePlural)}</button>` + groups.map(view => `<button class="stat ${filter === view && !cardSummary ? "active" : ""}" data-filter="${view}" aria-pressed="${filter === view && !cardSummary}"><b>${filtered(view, "", "").length}</b>${names[view]}</button>`).join("");
     root.querySelector("[data-scopes]").innerHTML = `<button class="scope ${!scope ? "active" : ""}" data-scope="">${escape(config.allLabel)}</button>` + snapshot.cards.map(card => `<button class="scope ${scope === card.id ? "active" : ""}" data-scope="${escape(card.id)}">${escape(card.name)}</button>`).join("");
     root.querySelector("[data-list]").innerHTML = cardSummary ? snapshot.cards.map(card => {
@@ -365,7 +367,7 @@ function createOffersAssistant(config, adapterFactory) {
       const logo = offer.imageUrl ? `<img src="${escape(offer.imageUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">` : `<span class="initials">${escape(offer.name.slice(0, 2).toUpperCase())}</span>`;
       return `<article class="offer ${selected.length ? "selected" : ""}" data-offer="${key}"><button class="offer-head" data-offer-toggle aria-pressed="${allSelected}" aria-label="${escape(`${allSelected ? "Deselect" : "Select"} all eligible ${config.scopePlural} for ${offer.name}`)}" ${busy || !eligible ? "disabled" : ""}><span class="logo">${logo}</span><span class="offer-main"><strong>${escape(offer.name)}</strong><span class="description">${escape(offer.description || "")}</span><span class="${complete ? "green" : "meta"}">${added}/${total} ${escape(config.scopePlural)} added</span></span><span class="count ${complete ? "green" : ""}">${eligible || (complete ? added : unknown)}<small>${eligible ? "eligible" : complete ? "added" : "unverified"}</small></span></button><div class="cards">${snapshot.cards.filter(card => offer.cards[card.id]).map(card => {
         const state = offer.cards[card.id];
-        return `<button class="card ${state} ${selected.includes(card.id) ? "chosen" : ""}" data-card="${escape(card.id)}" ${busy || state !== "addable" ? "disabled" : ""} aria-pressed="${selected.includes(card.id)}" title="${escape(`${card.name}: ${state}`)}">${state === "added" ? "&#10003; " : state === "unknown" ? "Unverified: " : ""}${escape(card.name)}</button>`;
+        return `<button class="card ${state} ${selected.includes(card.id) ? "chosen" : ""}" data-card="${escape(card.id)}" ${busy || state !== "addable" ? "disabled" : ""} aria-pressed="${selected.includes(card.id)}" title="${escape(`${card.name}: ${state}`)}">${state === "added" ? "&#10003; " : state === "redeemed" ? "Redeemed: " : state === "unknown" ? "Unverified: " : ""}${escape(card.name)}</button>`;
       }).join("")}</div></article>`;
     }).join("");
     if (!root.querySelector("[data-list]").innerHTML) root.querySelector("[data-list]").innerHTML = '<div class="empty">No offers</div>';

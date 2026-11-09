@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         Chase Offers Assistant
 // @namespace    https://www.chase.com/
-// @version      0.1.22
+// @version      0.1.23
 // @description  Scan and manage Chase Offers across cards. Add selected offers only when you click Add selected.
 // @match        https://*.chase.com/*
 // @match        https://chase.com/*
@@ -56,7 +56,7 @@
     try {
       const clean = {
         cards: snapshot.cards.map(({ id, name, scannedAt, complete }) => ({ id, name, scannedAt, complete })),
-        offers: snapshot.offers.map(({ key, name, imageUrl = "", cards }) => ({ key, name, imageUrl, cards: { ...cards } })),
+        offers: snapshot.offers.map(({ key, name, description = "", imageUrl = "", cards }) => ({ key, name, description, imageUrl, cards: { ...cards } })),
         scannedAt: snapshot.scannedAt
       };
       localStorage.setItem(HUB_SOURCE_KEY, JSON.stringify({ bank: "chase", publishedAt: Date.now(), snapshot: clean }));
@@ -293,7 +293,7 @@
       if (!card || pageHasOfferError()) { log(`Skipped ${name}: Chase did not confirm this card's offers.`); continue; }
       if (!await loadCompleteOffers(card)) { log(`Skipped ${name}: full offer list was not confirmed.`); continue; }
       const offers = readOffersForCard();
-      if (!completed) { snapshot.cards = []; snapshot.offers = []; snapshot.selected = {}; cardFilter = ""; }
+      if (!completed) { snapshot.cards = []; snapshot.offers = savedRedeemedOffers(); snapshot.selected = {}; cardFilter = ""; }
       snapshot.cards.push(card);
       card.scannedAt = Date.now();
       card.complete = true;
@@ -344,16 +344,106 @@
 
   function mergeCardOffers(card, cardOffers) {
     const offers = new Map(snapshot.offers.map((offer) => [offer.key, offer]));
-    for (const offer of offers.values()) delete offer.cards[card.id];
+    for (const offer of offers.values()) if (offer.cards[card.id] !== "redeemed") delete offer.cards[card.id];
     for (const item of cardOffers) {
       const offer = offers.get(item.key) || { key: item.key, name: item.name, cards: {} };
       offer.name = offer.name.length >= item.name.length ? offer.name : item.name;
       if (item.imageUrl) offer.imageUrl = item.imageUrl;
-      offer.cards[card.id] = item.status;
+      offer.cards[card.id] = offer.cards[card.id] === "redeemed" || item.status === "redeemed" ? "redeemed" : item.status;
+      if (item.description) offer.description = item.description;
       offers.set(item.key, offer);
     }
     snapshot.offers = [...offers.values()].filter((offer) => Object.keys(offer.cards).length > 0)
       .sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  function savedRedeemedOffers() {
+    return snapshot.offers.map(offer => ({ ...offer,
+      cards: Object.fromEntries(Object.entries(offer.cards).filter(([, status]) => status === 'redeemed')) }))
+      .filter(offer => Object.keys(offer.cards).length);
+  }
+
+  function redeemedWalletSelected() {
+    if (!/\/offer-wallet(?:[?/#]|$)/i.test(location.hash)) return false;
+    return Array.from(document.querySelectorAll('[data-cy="offerHubCategoryNavbarButton"]'))
+      .some(node => isVisible(node) && /^Redeemed$/i.test(textOf(node))
+        && /\bselected\b/i.test(node.getAttribute('aria-label') || ''));
+  }
+
+  function redeemedWalletRows() {
+    if (!redeemedWalletSelected()) return [];
+    return Array.from(document.querySelectorAll('[role="button"].offersListItemContainer'))
+      .filter(node => isVisible(node) && !node.closest(`#${ID}`));
+  }
+
+  function readRedeemedWalletForCard(card) {
+    if (!redeemedWalletSelected() || currentAccountId() !== String(card.id)) return [];
+    const picker = accountPicker();
+    if (!picker || pickerLabel(textOf(picker)) !== pickerLabel(card.name)) return [];
+    return redeemedWalletRows().map(row => {
+      const merchant = textOf(row.querySelector('.offersListItemTextPrimary .listItemLabel'));
+      const reward = textOf(row.querySelector('.offersListItemTextSecondary .listItemLabel'));
+      if (!merchant || !reward) return null;
+      const name = `${merchant} ${reward}`;
+      const image = row.querySelector('img');
+      return { key: normalizeOfferName(name), name, status: 'redeemed',
+        imageUrl: image?.currentSrc || image?.getAttribute('src') || '' };
+    }).filter(Boolean);
+  }
+
+  function mergeRedeemedOffers(card, incoming) {
+    const offers = new Map(snapshot.offers.map(offer => [offer.key, offer]));
+    for (const item of incoming) {
+      const offer = offers.get(item.key) || { key: item.key, name: item.name, cards: {} };
+      offer.name = offer.name.length >= item.name.length ? offer.name : item.name;
+      if (item.imageUrl) offer.imageUrl = item.imageUrl;
+      offer.cards[card.id] = 'redeemed';
+      offers.set(item.key, offer);
+    }
+    snapshot.offers = [...offers.values()].sort((left, right) => left.name.localeCompare(right.name));
+  }
+
+  async function scanRedeemedCards() {
+    if (scanInProgress || addInProgress) return;
+    scanInProgress = true;
+    cancelRequested = false;
+    render();
+    const original = location.href;
+    try {
+      const cards = [...snapshot.cards].filter(card => card.id && card.name);
+      if (!cards.length) throw new Error('Scan Chase cards before syncing redeemed offers.');
+      for (const card of cards) {
+        if (cancelRequested) break;
+        const previous = Array.from(document.querySelectorAll('[role="button"].offersListItemContainer'));
+        location.assign(`https://secure.chase.com/web/auth/dashboard#/dashboard/merchantOffers/offer-wallet?accountId=${encodeURIComponent(card.id)}`);
+        const loaded = await waitFor(() => /\/offer-wallet(?:[?/#]|$)/i.test(location.hash)
+          && currentAccountId() === String(card.id) && accountPicker()
+          && pickerLabel(textOf(accountPicker())) === pickerLabel(card.name)
+          && previous.every(row => !row.isConnected));
+        if (!loaded) { log(`Skipped ${card.name}: wallet did not load.`); continue; }
+        const tab = Array.from(document.querySelectorAll('[data-cy="offerHubCategoryNavbarButton"]'))
+          .find(node => isVisible(node) && /^Redeemed$/i.test(textOf(node)));
+        if (!tab) { log(`Skipped ${card.name}: Redeemed tab was unavailable.`); continue; }
+        tab.click();
+        const ready = await waitFor(() => redeemedWalletSelected() && (redeemedWalletRows().length > 0
+          || Array.from(document.querySelectorAll('h3')).some(node => isVisible(node)
+            && /^You haven't redeemed any offers in the past 90 days\.?$/i.test(textOf(node)))));
+        if (!ready) { log(`Skipped ${card.name}: Redeemed list was not confirmed.`); continue; }
+        const offers = readRedeemedWalletForCard(card);
+        if (redeemedWalletRows().length && offers.length !== redeemedWalletRows().length) {
+          log(`Skipped ${card.name}: some Redeemed rows were unreadable.`); continue;
+        }
+        mergeRedeemedOffers(card, offers);
+        log(`${card.name}: ${offers.length} redeemed offer(s).`);
+      }
+      saveSnapshot();
+      publishHubSnapshot();
+    } catch (error) { log(`Redeemed sync stopped: ${error.message}`); }
+    finally {
+      if (!cancelRequested && location.href !== original) location.assign(original);
+      scanInProgress = false;
+      render();
+    }
   }
 
   async function waitFor(check, timeout = WAIT_MS) {
@@ -410,8 +500,9 @@
       if (cancelRequested) return;
       const ready = await openOverview();
       if (!ready) throw new Error("Account overview did not load");
+      const redeemed = savedRedeemedOffers();
       snapshot.cards = readCards().map(card => ({ ...card, scannedAt: 0, complete: false }));
-      snapshot.offers = [];
+      snapshot.offers = redeemed;
       snapshot.selected = {};
       saveSnapshot();
       log(`Found ${snapshot.cards.length} card(s). Starting read-only scan.`);
@@ -662,6 +753,7 @@
       if (filter === "selected" && !(snapshot.selected[offer.key] || []).length) return false;
       if (filter === "addable" && !statuses.includes("addable")) return false;
       if (filter === "added" && !isOfferFullyAdded(offer)) return false;
+      if (filter === "redeemed" && !statuses.includes("redeemed")) return false;
       return !query || offer.name.toLowerCase().includes(query);
     });
   }
@@ -870,6 +962,7 @@
         <div class="controls">
           <div class="actions">
           <button data-scan ${scanInProgress || addInProgress ? "disabled" : ""}>Scan all cards</button>
+          <button data-redeemed ${scanInProgress || addInProgress ? "disabled" : ""}>Sync redeemed</button>
           <button class="secondary" data-select ${scanInProgress || addInProgress ? "disabled" : ""}>Select visible</button>
           <button class="secondary" data-clear ${scanInProgress || addInProgress ? "disabled" : ""}>Clear</button>
           <button data-add ${selected && !scanInProgress && !addInProgress ? "" : "disabled"}>Add selected (${selected})</button>
@@ -877,7 +970,7 @@
           </div>
           <label class="search"><span class="search-icon" aria-hidden="true"></span><input data-search placeholder="Search merchants or offers" value="${escapeHtml(searchTerm)}"></label>
           <div class="stats"><button class="stat ${cardSummaryMode ? "active" : ""}" data-stat="cards"><b>${snapshot.cards.length}</b><span>Cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "all" ? "active" : ""}" data-stat="all"><b>${snapshot.offers.length}</b><span>Unique offers</span></button><button class="stat ${!cardSummaryMode && viewFilter === "addable" ? "active" : ""}" data-stat="addable"><b>${addablePlacements}</b><span>Addable cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "added" ? "active" : ""}" data-stat="added"><b>${addedPlacements}</b><span>Added cards</span></button><button class="stat ${!cardSummaryMode && viewFilter === "selected" ? "active" : ""}" data-stat="selected"><b>${selected}</b><span>Selected</span></button></div>
-          <div class="filters"><button class="filter ${viewFilter === "all" ? "active" : ""}" data-filter="all">All ${snapshot.offers.length}</button><button class="filter ${viewFilter === "addable" ? "active" : ""}" data-filter="addable">Addable ${addableOffers}</button><button class="filter ${viewFilter === "added" ? "active" : ""}" data-filter="added">Added ${addedOffers}</button></div>
+          <div class="filters"><button class="filter ${viewFilter === "all" ? "active" : ""}" data-filter="all">All ${snapshot.offers.length}</button><button class="filter ${viewFilter === "addable" ? "active" : ""}" data-filter="addable">Addable ${addableOffers}</button><button class="filter ${viewFilter === "added" ? "active" : ""}" data-filter="added">Added ${addedOffers}</button><button class="filter ${viewFilter === "redeemed" ? "active" : ""}" data-filter="redeemed">Redeemed ${countOfferPlacements("redeemed")}</button></div>
           <div class="card-scope"><span class="scope-label">Card</span><button class="scope ${!cardFilter ? "active" : ""}" data-card-filter="">All cards</button>${snapshot.cards.map((card) => `<button class="scope ${cardFilter === card.id ? "active" : ""}" data-card-filter="${card.id}">${escapeHtml(card.name)} · ${countCardOffers(card.id)}</button>`).join("")}</div>
         </div>
         <section class="list">${listContent}</section>
@@ -887,6 +980,7 @@
     setMinimized(minimized);
 
     panel.querySelector("[data-scan]")?.addEventListener("click", scanAllCards);
+    panel.querySelector("[data-redeemed]")?.addEventListener("click", scanRedeemedCards);
     panel.querySelector("[data-select]")?.addEventListener("click", selectVisibleAddable);
     panel.querySelector("[data-clear]")?.addEventListener("click", clearSelection);
     panel.querySelector("[data-add]")?.addEventListener("click", addSelectedOffers);
@@ -928,7 +1022,7 @@
 
   if (globalThis.__CHASE_ASSISTANT_TEST__) {
     globalThis.__CHASE_ASSISTANT_TEST__.queue = { openOffers, addSelectedOffers, stopCurrentRun };
-    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, readCards, readOffersForCard, selectedTasks, loadAddRun, saveAddRun, clearAddRun, removeCardTasks, markCardUnavailable, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers, isOffersPage, pickerOptions, openPickerCard, scanAllCards, findAddButton, mount: () => { panel = makePanel(); render(); return panel; }, render, minimized: () => minimized };
+    globalThis.__CHASE_ASSISTANT_TEST__.api = { normalizeOfferName, displayOfferName, mergeCardOffers, mergeRedeemedOffers, readCards, readOffersForCard, readRedeemedWalletForCard, scanRedeemedCards, selectedTasks, loadAddRun, saveAddRun, clearAddRun, removeCardTasks, markCardUnavailable, toggleOfferSelection, toggleSelection, isOfferFullyAdded, filteredOffers, isOffersPage, pickerOptions, openPickerCard, scanAllCards, findAddButton, mount: () => { panel = makePanel(); render(); return panel; }, render, minimized: () => minimized };
     return;
   }
 

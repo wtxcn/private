@@ -227,6 +227,34 @@ test('US Bank: current OfferHub detail controls identify addable and activated d
   assert.equal(typeof api.adapter.closeDetail, 'function');
   dom.window.close();
 });
+
+test('US Bank: Redeemed tab supplies account-level evidence without assigning every card', () => {
+  const html = `<button id="tab_usb-tabs_3" role="tab" aria-selected="true">Redeemed</button>
+    <h3>Redeemed deals</h3>
+    <button aria-label="Offer from Merchant A 10% cash back"><span>Merchant A 10% cash back</span></button>`;
+  const { dom, w, api } = setup('usbank', html);
+  const rows = api.adapter.readRedeemedOffers();
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0].status, 'redeemed');
+  assert.equal(rows[0].card.id, 'cashback-redeemed');
+  api.merge({ id: 'cashback-deals', name: 'Cash-back deals' }, rows);
+  assert.equal(api.filtered('redeemed').length, 1);
+  assert.equal(Object.keys(api.snapshot().offers[0].cards).length, 1);
+  api.merge({ id: 'cashback-deals:1234', name: 'Test Card (...1234)' }, [{ ...rows[0], card: { id: 'cashback-deals:1234', name: 'Test Card (...1234)' }, status: 'added' }], true);
+  assert.equal(api.snapshot().offers[0].cards['cashback-redeemed'], 'redeemed');
+  w.document.querySelector('[role="tab"]').setAttribute('aria-selected', 'false');
+  assert.equal(api.adapter.readRedeemedOffers().length, 0);
+  dom.window.close();
+});
+test('US Bank: Redeemed waits for a row or a confirmed empty state', () => {
+  const { dom, w, api } = setup('usbank', '<button role="tab" aria-selected="true">Redeemed</button><h3>Redeemed deals</h3>');
+  assert.equal(api.adapter.redeemedListSettled(), false);
+  const empty = w.document.createElement('p');
+  empty.textContent = 'You have no redeemed deals in the past six months.';
+  w.document.body.append(empty);
+  assert.equal(api.adapter.redeemedListSettled(), true);
+  dom.window.close();
+});
 test('US Bank: card labels and offer details expose the real card ending', async () => {
   const html = '<button aria-label="Select U.S. Bank Cash+ Visa Signature Card ending in 4321">Account</button><button aria-label="Offer from Merchant A 10% cash back"><span>10% cash back</span></button>';
   const { dom, api, w } = setup('usbank', html);
@@ -278,7 +306,7 @@ test('packaged scripts have independent identities, no remote library, no confir
     assert.match(code, /pointermove/);
     assert.match(code, /cardOffersHubSource\.\$\{config\.adapter\}\.v1/);
   }
-  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.9/);
+  assert.match(fs.readFileSync(path.join(base, 'USBankOffersAssistant.user.js'), 'utf8'), /@version\s+0\.1\.10/);
 });
 
 test('an omitted card-offer record on rescan cannot make a partial offer fully added', () => {

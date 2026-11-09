@@ -535,7 +535,7 @@ test('offer scans retain Chase tile imagery for the visual list', () => {
 });
 
 test('the assistant panel uses the refreshed logo, system font, and offer-state colors', () => {
-  assert.match(source, /@version\s+0\.1\.22/);
+  assert.match(source, /@version\s+0\.1\.23/);
   assert.match(source, /brand-card/);
   assert.match(source, /search-icon/);
   assert.match(source, /-apple-system,BlinkMacSystemFont/);
@@ -638,6 +638,31 @@ test('partial offers stay in Addable even when filtering to an already-added car
   assert.ok(!keys('addable').includes('partial'));
   assert.match(source, /const addedOffers = snapshot\.offers\.filter\(isOfferFullyAdded\)\.length/);
   assert.match(source, /const isComplete = isOfferFullyAdded\(offer\)/);
+});
+
+test('Chase reads only the selected card and Redeemed wallet, then preserves redemption on rescan', () => {
+  const { dom, w, api } = loadPanel({ cards: [{ id: '123', name: 'Test Card (...1234)' }], offers: [
+    { key: 'merchant 10% cash back', name: 'Merchant 10% cash back', cards: { '123': 'added' } },
+    { key: 'other', name: 'Other', cards: { '123': 'addable' } }
+  ], selected: {}, scannedAt: 100 });
+  w.location.hash = '#/dashboard/merchantOffers/offer-wallet?accountId=123';
+  w.document.body.insertAdjacentHTML('beforeend', `<div data-testid="select-credit-card-account">Test Card (...1234)</div>
+    <button data-cy="offerHubCategoryNavbarButton" aria-label="Redeemed 2 of 4 selected">Redeemed</button>
+    <div role="button" class="offersListItemContainer" data-testid="redeemed-offer-list-item-container">
+      <div class="offersListItemTextPrimary"><span class="listItemLabel">Merchant</span></div>
+      <div class="offersListItemTextSecondary"><span class="listItemLabel">10% cash back</span></div></div>`);
+  const card = { id: '123', name: 'Test Card (...1234)' };
+  const rows = api.readRedeemedWalletForCard(card);
+  assert.equal(rows.length, 1);
+  assert.equal(api.readRedeemedWalletForCard({ id: '456', name: card.name }).length, 0);
+  api.mergeRedeemedOffers(card, rows);
+  assert.deepEqual(Array.from(api.filteredOffers('redeemed'), offer => offer.key), ['merchant 10% cash back']);
+  assert.equal(api.filteredOffers('addable').length, 1);
+  api.mergeCardOffers(card, [{ key: rows[0].key, name: rows[0].name, status: 'added' }]);
+  assert.equal(api.filteredOffers('redeemed').length, 1);
+  w.document.querySelector('[data-cy]').setAttribute('aria-label', 'Redeemed 2 of 4');
+  assert.equal(api.readRedeemedWalletForCard(card).length, 0);
+  dom.window.close();
 });
 
 test('offer selection toggles all eligible cards, skips added cards, and permits individual changes', () => {
