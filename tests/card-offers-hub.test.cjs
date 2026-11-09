@@ -568,7 +568,7 @@ test('Amex ignores hidden redeemed badges and unrelated selected navigation', ()
 });
 
 test('installable Hub is updateable, local-only and never starts bank actions', () => {
-  assert.match(source, /@version\s+0\.1\.17/);
+  assert.match(source, /@version\s+0\.1\.18/);
   assert.doesNotMatch(source, /@match\s+https:\/\/github\.com/);
   assert.doesNotMatch(source, /card-offers-dashboard=1/);
   assert.match(source, /window\.open\("", "card-offers-dashboard"\)/);
