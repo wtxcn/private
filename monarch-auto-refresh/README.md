@@ -2,7 +2,7 @@
 
 [安装 MonarchAutoRefresher.user.js](https://raw.githubusercontent.com/wtxcn/private/main/MonarchAutoRefresher.user.js)
 
-Tampermonkey 用户脚本，v1.0.7。使用 Monarch 页面现有的 `Refresh all` 按钮，复用当前登录状态。
+Tampermonkey 用户脚本，v1.0.8。使用 Monarch 页面现有的 `Refresh all` 按钮，复用当前登录状态。
 
 ## 安装
 
@@ -31,7 +31,7 @@ Tampermonkey 用户脚本，v1.0.7。使用 Monarch 页面现有的 `Refresh all
 
 最近脚本尝试存放在站点本地存储中，只包含计划时点、尝试时间和点击状态。`attempted` 表示已记录点击尝试，`clicked` 表示已调用页面按钮；**它们都不表示 Monarch 或银行已成功同步**，同步结果以 Monarch 页面为准。用户手动点击刷新不会写入这条记录，脚本也不绕过 Monarch 或银行的限制。
 
-日志状态“Monarch 显示同步完成”表示脚本在本次点击后观察到了页面的 `Sync complete / All accounts are up to date` 提示；它不保证每家银行都产生了新数据。若 10 分钟内未观察到提示，显示“已点击，未确认完成”，不推断刷新失败。页面重载后仍会处理未确认记录；旧版点击若没有完成证据，也会标为未确认。
+日志状态“Monarch 显示同步完成”表示脚本在本次点击后观察到了页面的 `Sync complete / All accounts are up to date` 提示；它不保证每家银行都产生了新数据。若 10 分钟内未观察到提示，显示“已点击，未确认完成”，不推断刷新失败。日志左侧始终显示点击时间，不会用结果判定时间覆盖；旧版没有结果记录的点击会显示“结果未记录”。
 
 同一浏览器配置中的多个 Monarch 标签通过 Web Locks 和站点本地记录协调；已有可用 Accounts 标签时优先由它执行，否则仅一个标签进入 Accounts。不同浏览器、浏览器配置、无痕窗口及其他电脑之间不共享。清除站点存储会清除去重记录。点击前即记录尝试，服务器报错或限流时不会反复重试。
 
@@ -58,7 +58,7 @@ node --check MonarchAutoRefresher.user.js
 node tests/monarch-auto-refresh.test.cjs
 ```
 
-本地模拟检查不能证明浏览器实际后台定时触发或银行同步成功；安装后的真实定时执行仍需在浏览器中确认。页面根元素的 `data-monarch-auto-refresh-version` 和 `data-monarch-auto-refresh-status` 属性仅包含版本及通用运行状态，可用于诊断是否已加载。v1.0.7 还公开以下诊断属性，不包含账户信息：
+本地模拟检查不能证明浏览器实际后台定时触发或银行同步成功；安装后的真实定时执行仍需在浏览器中确认。页面根元素的 `data-monarch-auto-refresh-version` 和 `data-monarch-auto-refresh-status` 属性仅包含版本及通用运行状态，可用于诊断是否已加载。v1.0.8 还公开以下诊断属性，不包含账户信息：
 
 - `data-monarch-auto-refresh-last-check`：最近一次脚本检查时间。
 - `data-monarch-auto-refresh-page`：当前页面类型。
