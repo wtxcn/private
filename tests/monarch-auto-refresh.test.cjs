@@ -137,7 +137,7 @@ function environment(iso, options = {}) {
   const prefix = 'data-monarch-auto-refresh-';
   const transaction = environment('2026-11-08T19:59:00Z', { path: '/transactions' });
   await flush();
-  check(transaction.state.attrs[prefix + 'version'], '1.0.9', 'diagnostics exposes current version');
+  check(transaction.state.attrs[prefix + 'version'], '1.0.10', 'diagnostics exposes current version');
   check(transaction.state.attrs[prefix + 'page'], 'other', 'non-account route is observable');
   check(transaction.state.attrs[prefix + 'page-status'].includes('自动进入 Accounts'), true, 'non-account explanation is explicit');
   check(transaction.state.attrs[prefix + 'status'].includes('等待下次计划'), true, 'outside-window status explains waiting');
@@ -169,7 +169,7 @@ function environment(iso, options = {}) {
   const recorded = JSON.parse(transaction.state.attrs[prefix + 'last-attempt']);
   check(recorded.slot, 'America/Chicago:2026-11-08T14:00', 'DOM record exposes actual attempted slot');
   check(recorded.status, 'clicked', 'DOM record is updated after native click');
-  check(widget.textContent.includes('已调用点击'), true, 'widget distinguishes click from server success');
+  check(widget.textContent.includes('已点击，等待同步结果'), true, 'widget distinguishes click from server success');
   check(widget.textContent.includes('2026-11-08 17:00'), true, 'next schedule advances after scheduled hour');
   await transaction.at('2026-11-08T20:02:00Z');
   check(transaction.clicks(), 1, 'diagnostic updates preserve same-slot deduplication');
@@ -251,11 +251,17 @@ function environment(iso, options = {}) {
   await progressing.at('2026-11-08T11:01:00Z');
   check(JSON.parse(progressing.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
     'clicked', 'incomplete progress cannot confirm sync');
+  progressing.state.widgets[0].click();
+  check(progressing.state.widgets[0].textContent.includes('同步进度 60%（最多 10 分钟）'), true,
+    'expanded widget shows ongoing progress and wait window');
+  check(progressing.state.attrs[prefix + 'progress'], '60', 'progress is exposed for diagnostics');
   progressing.state.notices = [button({ name: 'Sync complete Your accounts are up to date',
     progress: progress(100) })];
   await progressing.at('2026-11-08T11:02:00Z');
   check(JSON.parse(progressing.shared.storage.get('monarch-auto-refresh:history:v1'))[0].outcome,
     'confirmed', 'full progress plus completion text confirms sync');
+  check(progressing.state.widgets[0].textContent.includes('同步进度'), false,
+    'completed result is no longer shown as in progress');
 
   const noNotice = environment('2026-11-08T11:00:00Z');
   await flush();
