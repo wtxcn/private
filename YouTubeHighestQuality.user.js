@@ -1,10 +1,10 @@
 // ==UserScript==
 // @name         YouTube 自动最高画质
 // @namespace    local.youtube.highest-quality
-// @version      1.0.2
+// @version      1.0.3
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js
-// @description  打开视频或切换视频时，自动选择播放器中最高的可用分辨率。
+// @description  打开视频或切换视频时，自动选择最高可用画质，同分辨率和帧率优先 Premium 增强码率。
 // @match        https://www.youtube.com/*
 // @match        https://youtube.com/*
 // @run-at       document-idle
@@ -20,6 +20,8 @@
   window[INSTANCE]?.stop();
   const QUALITY_LABEL = /^(quality|画质|畫質|画質|화질|calidad|qualité|qualität|qualidade|качество)$/i;
   const AUTO_LABEL = /\bauto\b|自动|自動/i;
+  const PREMIUM_LABEL = /premium|enhanced bitrate|增强比特率|增強位元率|高码率|高碼率/i;
+  const UPGRADE_LABEL = /\b(?:upgrade|subscribe)\b|\b(?:get|try|join)\s+(?:youtube\s+)?premium\b|free trial|升级|升級|订阅|訂閱/i;
   let stopped = false;
   let busy = false;
   let state = null;
@@ -63,16 +65,17 @@
     const normalized = text.replace(/\s+/g, ' ').trim();
     const match = normalized.match(/(?:^|\D)(\d{3,5})p\s*(\d{2,3})?/i);
     if (!match) return null;
-    return { height: Number(match[1]), fps: Number(match[2] || 0), label: normalized };
+    return { height: Number(match[1]), fps: Number(match[2] || 0),
+      premium: PREMIUM_LABEL.test(normalized), label: normalized };
   }
 
   function highestOption(items) {
     return items.map(el => ({ el, value: qualityValue(el.textContent || '') }))
       .filter(({ el, value }) => value && el.getAttribute('aria-disabled') !== 'true' &&
         !el.hasAttribute('disabled') && !el.classList.contains('ytp-menuitem-disabled') &&
-        !AUTO_LABEL.test(value.label) &&
-        !/premium|enhanced bitrate|增强比特率|增強位元率|高码率|高碼率|升级|升級/i.test(value.label))
-      .sort((a, b) => b.value.height - a.value.height || b.value.fps - a.value.fps)[0] || null;
+        !AUTO_LABEL.test(value.label) && !UPGRADE_LABEL.test(value.label))
+      .sort((a, b) => b.value.height - a.value.height || b.value.fps - a.value.fps ||
+        Number(b.value.premium) - Number(a.value.premium))[0] || null;
   }
 
   function stillCurrent(job, serial) {
@@ -115,14 +118,14 @@
   function matchesFixedQuality(text, target) {
     if (AUTO_LABEL.test(text)) return false;
     const value = qualityValue(text);
-    return value?.height === target.height && value?.fps === target.fps;
+    return value?.height === target.height && value?.fps === target.fps && value?.premium === target.premium;
   }
 
   async function confirmFixedQuality(job, serial, target) {
     if (!stillCurrent(job, serial)) return null;
     const settings = job.player.querySelector('.ytp-settings-button');
     if (!settings?.isConnected) return false;
-    // 发生选档点击后，先关再开一次，只以新的主菜单摘要确认。
+    // 发生选档点击后先关再开，避免读取点击前的菜单或已脱离文档的节点。
     if (settings.getAttribute('aria-expanded') === 'true') settings.click();
     const collapsed = await waitFor(() => {
       const button = job.player.querySelector('.ytp-settings-button');
@@ -131,6 +134,16 @@
     if (!collapsed) return stillCurrent(job, serial) ? false : null;
     if (!stillCurrent(job, serial)) return null;
     collapsed.click();
+    if (target.premium) {
+      // 主菜单可能只显示 1080p，无法区分普通档和 Premium；以新子菜单的勾选档确认。
+      const row = await waitFor(() => qualityRow(settingsPanel(job.player)), job, serial);
+      if (!row || !stillCurrent(job, serial)) return stillCurrent(job, serial) ? false : null;
+      row.click();
+      const checked = await waitFor(() => qualityOptions(settingsPanel(job.player)).some(el =>
+        el.getAttribute('aria-checked') === 'true' && matchesFixedQuality(el.textContent || '', target)
+      ), job, serial, 2000);
+      return checked ? true : stillCurrent(job, serial) ? false : null;
+    }
     const confirmed = await waitFor(() => {
       const row = qualityRow(settingsPanel(job.player));
       const summary = row?.querySelector('.ytp-menuitem-content')?.textContent || '';
@@ -292,6 +305,7 @@
     }
   };
   status('ready');
-  console.info('[YouTube 自动最高画质] v1.0.2 已启动');
+  console.info('[YouTube 自动最高画质] v1.0.3 已启动');
   wake();
 })();
+

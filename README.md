@@ -16,7 +16,7 @@ Tampermonkey userscripts for adding card offers by clicking each issuer's native
 - `CardCenter_Custom_Minimum.user.js`: configurable minimum Margin filter for CardCenter rates.
 - `Aligned_Incentives_Custom_Minimum.user.js`: configurable minimum Profit filter for Aligned Incentives.
 - `Southwest3TicketComboFinder.user.js`: Southwest fare collector and three-ticket combo finder.
-- `YouTubeHighestQuality.user.js`: automatically selects the highest available ordinary YouTube resolution.
+- `YouTubeHighestQuality.user.js`: automatically selects the highest available YouTube quality, preferring Premium enhanced bitrate at equal resolution and frame rate.
 
 ## Monarch Scheduled Refresh
 
@@ -24,15 +24,15 @@ Install [MonarchAutoRefresher.user.js](https://raw.githubusercontent.com/wtxcn/p
 
 ## YouTube Highest Quality
 
-Install [YouTubeHighestQuality.user.js](https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js) in Tampermonkey or Violentmonkey, ensure this individual script is enabled, then refresh YouTube. Opening a video or switching videos on the site automatically selects the highest available ordinary resolution, including 4K/8K when offered. At equal resolution, higher frame rates take priority. Auto, Premium enhanced-bitrate and upgrade options are skipped.
+Install [YouTubeHighestQuality.user.js](https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js) in Tampermonkey or Violentmonkey, ensure this individual script is enabled, then refresh YouTube. Opening a video or switching videos on the site automatically selects the highest available resolution, including 4K/8K when offered. At equal resolution, higher frame rates take priority; at equal resolution and frame rate, Premium enhanced bitrate takes priority over the ordinary tier. Auto, disabled options and explicit subscription/upgrade prompts are skipped. Premium playback requires the corresponding YouTube account access.
 
 The script uses the native quality menu, which may appear briefly. It waits while the user is using the menu, skips ads, and performs only a few checks per video. Existing buffered video can delay the visible resolution change. It does not change playback, volume, or subtitles. Ordinary watch pages use the inspected menu structure; Shorts and live streams are attempted only when they expose a compatible menu.
 
-Keep the video tab in the foreground with the settings menu closed for a few seconds after loading. To verify the selection, reopen Settings: Quality should show a fixed value such as `2160p60 4K`; `Auto (2160p60)` is still automatic. After a script update, refresh YouTube to load the new version.
+Keep the video tab in the foreground with the settings menu closed for a few seconds after loading. To verify the selection, reopen Settings: Quality should show a fixed value such as `2160p60 4K`; `Auto (2160p60)` is still automatic. For Premium, open the quality submenu and check that the Premium tier is checked: the main summary may omit the Premium label. The script also verifies that live submenu after selecting Premium. After a script update, refresh YouTube to load the new version.
 
-No remote library or extra network request is used by the script. Tampermonkey can download script updates from this repository. The script uses a DOM sandbox and exposes its local diagnostic status in the document element's `data-youtube-highest-quality` attribute, with resolution/reason companion attributes. Syntax checks and twelve synthetic DOM tests pass, including Auto exclusion and rebuilt-menu confirmation.
+No remote library or extra network request is used by the script. Tampermonkey can download script updates from this repository. The script uses a DOM sandbox and exposes its local diagnostic status in the document element's `data-youtube-highest-quality` attribute, with resolution/reason companion attributes. Syntax checks and nineteen synthetic DOM tests pass, including Premium preference, unavailable-tier exclusion, Auto exclusion and rebuilt-menu confirmation.
 
-An initial live Chrome/Tampermonkey test confirmed a fixed `2160p60 4K` selection after enabling the individual script. The final follow-up-check adjustment and SPA navigation are covered by synthetic tests; live revalidation remains pending.
+An initial live Chrome/Tampermonkey test confirmed a fixed `2160p60 4K` selection after enabling the individual script. Premium selection, the follow-up-check adjustment and SPA navigation are covered by synthetic tests; live revalidation of version 1.0.3 remains pending.
 
 ```sh
 node --check YouTubeHighestQuality.user.js
@@ -229,3 +229,4 @@ The U.S. Bank script is intentionally UI-only:
 - It skips deals it has already checked during the current run.
 - It scrolls slowly to load more deals.
 - Keep-alive is enabled by default for long runs.
+

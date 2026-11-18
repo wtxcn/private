@@ -26,6 +26,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
   const classes = new Set();
   const video = { readyState: 4 };
   const visibleNode = () => ({ isConnected: true, getClientRects() { return this.isConnected ? [1] : []; } });
+  const summaryText = () => behavior.plainSummary ? currentQuality.replace(/ Premium.*$/, '') : currentQuality;
 
   function rebuildMenu(nextMode) {
     if (panel) {
@@ -34,7 +35,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
     }
     mode = nextMode;
     generation++;
-    summary = { textContent: currentQuality };
+    summary = { textContent: summaryText() };
     const menuSummary = summary;
     const menuItems = labels.map(text => {
       const attributes = new Map([['aria-checked', String(text === currentQuality)]]);
@@ -50,7 +51,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
           if (!behavior.ignoreSelection) currentQuality = text;
           if (!behavior.rebuildOnSelect) {
             menuItems.forEach(option => option.setAttribute('aria-checked', String(option.textContent === currentQuality)));
-            menuSummary.textContent = currentQuality;
+            menuSummary.textContent = summaryText();
           } else if (behavior.staleClickedChecked) {
             // A detached node may retain an optimistic checked state while the live UI rejects it.
             attributes.set('aria-checked', 'true');
@@ -92,7 +93,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
       if (expanded) {
         openCount++;
         if (behavior.rebuildOnOpen) rebuildMenu('main');
-        else { mode = 'main'; summary.textContent = currentQuality; }
+        else { mode = 'main'; summary.textContent = summaryText(); }
       }
     }
   };
@@ -170,11 +171,87 @@ test('ignores Auto options containing resolutions in English and Chinese', async
   assert.equal(f.status(), 'selected');
 });
 
-test('same resolution prefers higher frame rate and ignores upgrade/disabled options', async () => {
+test('same resolution prefers higher frame rate and ignores disabled options', async () => {
   const f = fixture(['1080p Premium Enhanced bitrate', '2160p60', '1440p30', '1440p60', 'Auto']);
   f.items[1].setAttribute('aria-disabled', 'true');
   f.advance(); await f.hooks.tick();
   assert.deepEqual(f.selected, ['1440p60']);
+});
+
+test('upgrades checked ordinary 1080p to Premium even when ordinary appears first', async () => {
+  const premium = '1080p Premium HD Enhanced bitrate';
+  const f = fixture(['1080p HD', premium, '720p', 'Auto (1080p)'], { initialQuality: '1080p HD' });
+  f.advance(); await f.hooks.tick();
+  assert.deepEqual(f.selected, [premium]);
+  assert.equal(f.status(), 'selected');
+  assert.equal(f.resolution(), premium);
+  assert.equal(f.expanded(), false);
+});
+
+test('higher resolution and frame rate still outrank a lower Premium tier', async () => {
+  for (const best of ['2160p 4K', '1080p60 HD']) {
+    const f = fixture(['1080p Premium Enhanced bitrate', best, '720p']);
+    f.advance(); await f.hooks.tick();
+    assert.deepEqual(f.selected, [best]);
+  }
+});
+
+test('recognizes enhanced bitrate labels at equal resolution and frame rate', async () => {
+  for (const label of ['Enhanced bitrate', '增强比特率', '增強位元率', '高码率', '高碼率']) {
+    const premium = '1080p60 ' + label;
+    const f = fixture(['1080p60 HD', premium]);
+    f.advance(); await f.hooks.tick();
+    assert.deepEqual(f.selected, [premium]);
+    assert.equal(f.status(), 'selected');
+  }
+});
+
+test('skips unavailable Premium and explicit upgrade options', async () => {
+  const f = fixture(['1080p Premium', '1440p Premium', '2160p Premium',
+    '4320p Premium Upgrade', '4320p Get YouTube Premium', '4320p 升级 Premium', '1080p HD']);
+  f.items[0].setAttribute('aria-disabled', 'true');
+  f.items[1].setAttribute('disabled', '');
+  f.classes.add('2160p Premium:ytp-menuitem-disabled');
+  f.advance(); await f.hooks.tick();
+  assert.deepEqual(f.selected, ['1080p HD']);
+});
+
+test('confirms checked Premium in the live submenu when summary omits Premium', async () => {
+  const premium = '1080p Premium Enhanced bitrate';
+  const f = fixture(['1080p', premium], {
+    initialQuality: '1080p', plainSummary: true,
+    rebuildOnOpen: true, rebuildOnQuality: true, rebuildOnSelect: true
+  });
+  f.advance(); await f.hooks.tick();
+  assert.deepEqual(f.selected, [premium]);
+  assert.equal(f.status(), 'selected');
+  assert.equal(f.resolution(), premium);
+  assert.equal(f.qualityOpenCount(), 2);
+  assert.equal(f.expanded(), false);
+});
+
+test('does not claim Premium from ordinary 1080p or a stale checked Premium node', async () => {
+  const premium = '1080p Premium Enhanced bitrate';
+  const f = fixture(['1080p', premium], {
+    initialQuality: '1080p', ignoreSelection: true,
+    rebuildOnOpen: true, rebuildOnQuality: true, rebuildOnSelect: true, staleClickedChecked: true
+  });
+  f.advance(); await f.hooks.tick();
+  assert.deepEqual(f.selected, [premium]);
+  assert.equal(f.status(), 'error');
+  assert.equal(f.reason(), 'selection-not-confirmed');
+  assert.equal(f.notices.length, 0);
+  assert.equal(f.expanded(), false);
+});
+
+test('accepts an already-checked Premium tier without repeated clicks', async () => {
+  const premium = '1080p Premium Enhanced bitrate';
+  const f = fixture(['1080p', premium], { initialQuality: premium, plainSummary: true });
+  f.advance(); await f.hooks.tick();
+  assert.deepEqual(f.selected, []);
+  assert.equal(f.status(), 'selected');
+  assert.equal(f.resolution(), premium);
+  assert.equal(f.qualityOpenCount(), 1);
 });
 
 test('preserves an already-open user menu and does not touch ad playback', async () => {
@@ -273,9 +350,10 @@ test('limits automatic quality checks to three per video and restarts for the ne
 test('reports startup and stopping without exposing browsing information', async () => {
   const f = fixture();
   assert.equal(f.status(), 'ready');
-  assert.ok(f.messages.some(args => args.some(text => String(text).includes('v1.0.2'))));
+  assert.ok(f.messages.some(args => args.some(text => String(text).includes('v1.0.3'))));
   f.stop(); f.advance(); await f.hooks.tick();
   assert.equal(f.status(), 'stopped');
   assert.equal(f.resolution(), undefined);
   assert.equal(f.openCount(), 0);
 });
+
