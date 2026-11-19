@@ -8,6 +8,7 @@ const source = fs.readFileSync('YouTubeHighestQuality.user.js', 'utf8')
 function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
   let now = 10000;
   let expanded = false;
+  let closeAt = Infinity;
   let mode = 'main';
   let openCount = 0;
   let qualityOpenCount = 0;
@@ -27,6 +28,10 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
   const video = { readyState: 4 };
   const visibleNode = () => ({ isConnected: true, getClientRects() { return this.isConnected ? [1] : []; } });
   const summaryText = () => behavior.plainSummary ? currentQuality.replace(/ Premium.*$/, '') : currentQuality;
+  const menuVisible = () => {
+    if (now >= closeAt) { expanded = false; closeAt = Infinity; }
+    return expanded;
+  };
 
   function rebuildMenu(nextMode) {
     if (panel) {
@@ -41,7 +46,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
       const attributes = new Map([['aria-checked', String(text === currentQuality)]]);
       const item = {
         ...visibleNode(), textContent: text,
-        getClientRects() { return this.isConnected && expanded && mode === 'quality' ? [1] : []; },
+        getClientRects() { return this.isConnected && menuVisible() && mode === 'quality' ? [1] : []; },
         classList: { contains: name => classes.has(text + ':' + name) },
         getAttribute: key => attributes.get(key) || null,
         hasAttribute: key => attributes.has(key),
@@ -56,7 +61,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
             // A detached node may retain an optimistic checked state while the live UI rejects it.
             attributes.set('aria-checked', 'true');
           }
-          expanded = false;
+          expanded = !!behavior.keepMenuOpenOnSelect;
           if (behavior.rebuildOnSelect) rebuildMenu('main');
         }
       };
@@ -65,7 +70,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
     items = menuItems;
     row = {
       ...visibleNode(),
-      getClientRects() { return this.isConnected && expanded && mode === 'main' ? [1] : []; },
+      getClientRects() { return this.isConnected && menuVisible() && mode === 'main' ? [1] : []; },
       querySelector: selector => selector === '.ytp-menuitem-label' ? { textContent: 'Quality' } :
         selector === '.ytp-menuitem-content' ? menuSummary : null,
       click() {
@@ -77,7 +82,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
     const menuRow = row;
     panel = {
       ...visibleNode(), id: 'panel-' + generation,
-      getClientRects() { return this.isConnected && expanded ? [1] : []; },
+      getClientRects() { return this.isConnected && menuVisible() ? [1] : []; },
       querySelectorAll: selector => selector === '.ytp-menuitem' && mode === 'main' ? [menuRow] :
         selector === '[role="menuitemradio"]' && mode === 'quality' ? menuItems : []
     };
@@ -86,9 +91,12 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
   rebuildMenu('main');
   const settings = {
     ...visibleNode(),
-    getAttribute: key => key === 'aria-expanded' ? String(expanded) :
+    getAttribute: key => key === 'aria-expanded' ? (behavior.noAriaExpanded ? null :
+      behavior.staleSubmenuAria && mode === 'quality' ? 'false' : String(menuVisible())) :
       key === 'aria-controls' ? (behavior.noAriaControls ? null : panel.id) : null,
     click() {
+      if (menuVisible() && behavior.ignoreClose) return;
+      if (menuVisible() && behavior.delayedClose) { closeAt = now + 250; return; }
       expanded = !expanded;
       if (expanded) {
         openCount++;
@@ -145,7 +153,7 @@ function fixture(labels = ['360p', '2160p60 4K', '1080p60 HD'], behavior = {}) {
     setExpanded(value) { expanded = value; },
     openCount: () => openCount,
     qualityOpenCount: () => qualityOpenCount,
-    expanded: () => expanded,
+    expanded: menuVisible,
     status: () => rootAttributes.get('data-youtube-highest-quality'),
     reason: () => rootAttributes.get('data-youtube-highest-quality-reason'),
     resolution: () => rootAttributes.get('data-youtube-highest-quality-resolution'),
@@ -254,6 +262,58 @@ test('accepts an already-checked Premium tier without repeated clicks', async ()
   assert.equal(f.qualityOpenCount(), 1);
 });
 
+test('closes an already-selected quality submenu even when aria-expanded says false', async () => {
+  const f = fixture(['2160p 4K', '1080p'], { initialQuality: '2160p 4K', staleSubmenuAria: true });
+  f.advance(); await f.hooks.tick();
+  assert.equal(f.status(), 'selected');
+  assert.equal(f.expanded(), false);
+  assert.deepEqual(f.selected, []);
+});
+
+test('selects and closes menus when aria-expanded is missing', async () => {
+  const f = fixture(['2160p 4K', '1080p'], { noAriaExpanded: true });
+  f.advance(); await f.hooks.tick();
+  assert.equal(f.status(), 'selected');
+  assert.equal(f.expanded(), false);
+  assert.deepEqual(f.selected, ['2160p 4K']);
+});
+
+test('closes Premium confirmation submenu with stale aria-expanded and rebuilt DOM', async () => {
+  const premium = '1080p Premium Enhanced bitrate';
+  const f = fixture([premium, '1080p'], {
+    initialQuality: '1080p', staleSubmenuAria: true, keepMenuOpenOnSelect: true,
+    rebuildOnOpen: true, rebuildOnQuality: true, rebuildOnSelect: true, plainSummary: true
+  });
+  f.advance(); await f.hooks.tick();
+  assert.equal(f.status(), 'selected');
+  assert.deepEqual(f.selected, [premium]);
+  assert.equal(f.expanded(), false);
+});
+
+test('waits for a delayed menu close without toggling it open again', async () => {
+  const f = fixture(['2160p 4K'], { initialQuality: '2160p 4K', delayedClose: true });
+  f.advance(); await f.hooks.tick();
+  assert.equal(f.status(), 'selected');
+  assert.equal(f.expanded(), false);
+  assert.equal(f.openCount(), 1);
+});
+
+test('does not report success while the script-opened menu remains visible', async () => {
+  const f = fixture(['2160p 4K'], { initialQuality: '2160p 4K', ignoreClose: true });
+  f.advance(); await f.hooks.tick();
+  assert.equal(f.status(), 'error');
+  assert.equal(f.reason(), 'menu-not-closed');
+  assert.equal(f.notices.length, 0);
+});
+
+test('preserves a user-open menu even when aria-expanded is missing', async () => {
+  const f = fixture(['2160p 4K'], { noAriaExpanded: true });
+  f.setExpanded(true); f.advance(); await f.hooks.tick();
+  assert.equal(f.reason(), 'menu-open');
+  assert.equal(f.openCount(), 0);
+  assert.equal(f.expanded(), true);
+});
+
 test('preserves an already-open user menu and does not touch ad playback', async () => {
   const f = fixture();
   f.setExpanded(true); f.advance(); await f.hooks.tick();
@@ -350,7 +410,7 @@ test('limits automatic quality checks to three per video and restarts for the ne
 test('reports startup and stopping without exposing browsing information', async () => {
   const f = fixture();
   assert.equal(f.status(), 'ready');
-  assert.ok(f.messages.some(args => args.some(text => String(text).includes('v1.0.3'))));
+  assert.ok(f.messages.some(args => args.some(text => String(text).includes('v1.0.4'))));
   f.stop(); f.advance(); await f.hooks.tick();
   assert.equal(f.status(), 'stopped');
   assert.equal(f.resolution(), undefined);

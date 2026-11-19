@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         YouTube 自动最高画质
 // @namespace    local.youtube.highest-quality
-// @version      1.0.3
+// @version      1.0.4
 // @updateURL    https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js
 // @downloadURL  https://raw.githubusercontent.com/wtxcn/private/main/YouTubeHighestQuality.user.js
 // @description  打开视频或切换视频时，自动选择最高可用画质，同分辨率和帧率优先 Premium 增强码率。
@@ -105,6 +105,20 @@
       player.querySelector('.ytp-settings-menu')].find(visible) || null;
   }
 
+  async function closeSettingsMenu(job, serial) {
+    // 子菜单的 aria-expanded 可能缺失或滞后；以面板实际消失为准，避免残留或反向打开。
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      if (!stillCurrent(job, serial)) return null;
+      if (!settingsPanel(job.player)) return true;
+      const settings = job.player.querySelector('.ytp-settings-button');
+      if (!settings?.isConnected) return false;
+      settings.click();
+      const closed = await waitFor(() => !settingsPanel(job.player), job, serial, 800);
+      if (closed) return true;
+    }
+    return stillCurrent(job, serial) ? false : null;
+  }
+
   function qualityRow(panel) {
     return [...(panel?.querySelectorAll('.ytp-menuitem') || [])].find(el =>
       visible(el) && QUALITY_LABEL.test(el.querySelector('.ytp-menuitem-label')?.textContent.trim() || '')
@@ -123,17 +137,13 @@
 
   async function confirmFixedQuality(job, serial, target) {
     if (!stillCurrent(job, serial)) return null;
-    const settings = job.player.querySelector('.ytp-settings-button');
-    if (!settings?.isConnected) return false;
     // 发生选档点击后先关再开，避免读取点击前的菜单或已脱离文档的节点。
-    if (settings.getAttribute('aria-expanded') === 'true') settings.click();
-    const collapsed = await waitFor(() => {
-      const button = job.player.querySelector('.ytp-settings-button');
-      return button?.isConnected && button.getAttribute('aria-expanded') === 'false' && button;
-    }, job, serial);
+    const collapsed = await closeSettingsMenu(job, serial);
     if (!collapsed) return stillCurrent(job, serial) ? false : null;
     if (!stillCurrent(job, serial)) return null;
-    collapsed.click();
+    const settings = job.player.querySelector('.ytp-settings-button');
+    if (!settings?.isConnected) return false;
+    settings.click();
     if (target.premium) {
       // 主菜单可能只显示 1080p，无法区分普通档和 Premium；以新子菜单的勾选档确认。
       const row = await waitFor(() => qualityRow(settingsPanel(job.player)), job, serial);
@@ -176,12 +186,13 @@
     if (waiting) { status('waiting', '', waiting); return null; }
     const settings = player.querySelector('.ytp-settings-button');
     // 用户正在看菜单时延后，不接管用户打开的设置。
-    if (!settings || settings.getAttribute('aria-expanded') === 'true') {
+    if (!settings || settingsPanel(player) || settings.getAttribute('aria-expanded') === 'true') {
       status('waiting', '', settings ? 'menu-open' : 'settings-not-ready');
       return null;
     }
     const serial = interaction;
     let opened = false;
+    let cleanupAttempted = false;
     const focusBefore = document.activeElement;
     try {
       if (!stillCurrent(job, serial)) return null;
@@ -217,6 +228,13 @@
         }
       }
       // 未点击时，当前新查询、连接且可见的最高固定档已勾选，直接接受，避免重复切换菜单。
+      cleanupAttempted = true;
+      const closed = await closeSettingsMenu(job, serial);
+      if (!closed) {
+        if (!stillCurrent(job, serial)) return null;
+        status('error', '', 'menu-not-closed');
+        return false;
+      }
       status('selected', value.label);
       if (job.selected !== value.label) notify(value.label);
       job.selected = value.label;
@@ -225,9 +243,9 @@
     } finally {
       // 只关闭本轮自己打开的菜单；用户插手或页面切换后不再操作。
       if (opened && stillCurrent(job, serial)) {
-        const currentSettings = player.querySelector('.ytp-settings-button');
-        if (currentSettings?.isConnected && currentSettings.getAttribute('aria-expanded') === 'true') currentSettings.click();
-        if (focusBefore?.isConnected && player.contains(document.activeElement) &&
+        if (!cleanupAttempted) await closeSettingsMenu(job, serial);
+        if (stillCurrent(job, serial) && !settingsPanel(player) &&
+            focusBefore?.isConnected && player.contains(document.activeElement) &&
             typeof focusBefore.focus === 'function') focusBefore.focus({ preventScroll: true });
       }
     }
@@ -305,7 +323,7 @@
     }
   };
   status('ready');
-  console.info('[YouTube 自动最高画质] v1.0.3 已启动');
+  console.info('[YouTube 自动最高画质] v1.0.4 已启动');
   wake();
 })();
 
